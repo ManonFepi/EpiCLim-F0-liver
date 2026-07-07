@@ -3,7 +3,7 @@ This repository contains the analysis code for the phenotypic and multi-omics ch
 This work is part of the EpiClim project (FORMAS grant 2022-01443).
 
 ## Repository structure
-- `morphology/` — Morphological and histological analysis
+- `morphology/` — Morphological analysis
 - `transcriptomics/` — RNA-seq differential expression and pathway analysis
 - `metabolomics/` — Untargeted metabolomics analysis (Mummichog)
 - `lipidomics/` — Untargeted lipidomics analysis (Mummichog)
