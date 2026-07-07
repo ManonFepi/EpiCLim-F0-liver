@@ -1,0 +1,1842 @@
+---
+title: "EpiCLim_Differential_expression_analysis_Transcriptomic_F0_Liver"
+author: "Manon"
+date: "2026-03-03"
+output: html_document
+---
+
+## Introduction
+This script was used to perform differential expression analysis on adult zebrafish 
+liver RNA-seq data following developmental exposure (2 hpf to 28 dpf) to 
+combined climate stressors (acidification at pH 6.35, elevated temperature 
+at 32°C) and PFOS (nominal 2 µg/L) in a 2×2×2 factorial design.
+
+Analyses are performed on female liver samples (n=27, main analysis; n=25, 
+sensitivity analysis). Male samples are excluded due to strong sexual 
+dimorphism of the zebrafish liver transcriptome, in accordance with the 
+overall study design.
+
+Raw sequencing data are available on GEO (accession GSE######).
+
+## Setup
+
+```{r setup, include=FALSE}
+# Install packages if needed
+# Uncomment the following lines to install missing packages:
+#if (!require("BiocManager")) install.packages("BiocManager")
+#if (!require("DESeq2")) BiocManager::install("DESeq2")
+#if (!require("ggplot2")) install.packages("ggplot2")
+#if (!require("pheatmap")) install.packages("pheatmap")
+#BiocManager::install("apeglm")
+#install.packages("ashr")
+
+# Load libraries
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(openxlsx)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+library(ashr)
+library(dplyr)
+library(UpSetR)
+library(ggupset)
+library(tidyverse)
+library(clusterProfiler)
+library(enrichplot)
+library(org.Dr.eg.db) 
+library(patchwork)
+library(rrvgo)
+library(cowplot)
+
+# Set your working directory to the location of this Rmd file
+# setwd("path/to/Rmd")
+```
+
+# Load count matrix
+The raw count matrix was produced by the nf-core/rnaseq pipeline using STAR alignment and Salmon quantification, then summarized to gene-level counts using tximeta. Salmon produces non-integer counts, these were rounded to integers as required by DESeq2. Gene names and Ensembl IDs are stored separately at this stage: gene IDs are used as row names throughout the analysis (unique identifiers), while gene names are retained for annotation of results later.
+
+```{r load_counts}
+counts <- openxlsx::read.xlsx("Raw_counts_transcripto_liver_females.xlsx")
+
+# Save gene names separately for annotation later
+genes_names<-counts$gene_name
+counts$gene_name<-NULL
+
+# Set gene_id as rownames
+rownames(counts)<-counts$gene_id
+counts$gene_id<-NULL
+
+# Round counts to integers (remove decimals)
+counts<-round(counts)
+
+# Confirm the dimensions of the final matrix with rows = genes and columns = samples. 
+dim(counts)
+```
+
+# Load metadata
+The metadata file contains one row per sample with all relevant biological and technical variables knowns: condition, sex, exposure batch, RIN score, duplication rate, 5'-3' bias, and proper pairs percentage. Setting sample names as row names is important as it allows direct indexing between the count matrix and metadata throughout the analysis. The final check confirms that every sample in the count matrix has a corresponding entry in the metadata --> must return TRUE before proceeding further.
+
+```{r metadata}
+metadata <- openxlsx::read.xlsx("metadata_females.xlsx")
+
+# Set sample names as row names for direct indexing with count matrix
+rownames(metadata) <- metadata$sample
+
+# Check that all sample names match with the count matrix
+all(colnames(counts) %in% metadata$sample)
+```
+
+# PCA females
+# PCA females
+A rlog transformation and set of PCA were performed to assess variability within the female samples. Each PC was correlated with biological and technical variables to understand what drives sample separation.
+
+```{r Females_PCA}
+
+#DESEQ2 object 
+dds_f <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData   = metadata,
+  design    = ~ 1
+)
+
+# Estimate size factors
+dds_explore <- estimateSizeFactors(dds_f)
+
+# Add to metadata
+metadata$size_factor <- sizeFactors(dds_explore)[rownames(metadata)]
+
+# rlog trasnformation
+rld_f <- rlog(dds_f, blind = TRUE)
+
+# Extraction of PCA coordinates
+pca_f <- plotPCA(rld_f,
+                 intgroup = c("condition"),
+                 returnData = TRUE)
+
+# Add the metadata variables
+pca_f$RIN          <- as.numeric(metadata[pca_f$name, "RIN"])
+pca_f$exposure     <- as.factor(metadata[pca_f$name, "exposure"])
+pca_f$size_factor  <- as.numeric(metadata[pca_f$name, "size_factor"])
+pca_f$dup_rate     <- as.numeric(metadata[pca_f$name, "duplication_rate"])
+pca_f$bias_5_3     <- as.numeric(metadata[pca_f$name, "five_three_prim_bias"])
+pca_f$proper_pairs <- as.numeric(metadata[pca_f$name, "proper_pairs"])
+
+# Get the variance explained by each PC
+percentVar_f <- round(100 * attr(pca_f, "percentVar"))
+cat("PC1 explains:", percentVar_f[1], "%\n")
+cat("PC2 explains:", percentVar_f[2], "%\n")
+
+# Update the labels for plots axis
+x_lab <- paste0("PC1 (", percentVar_f[1], "%)")
+y_lab <- paste0("PC2 (", percentVar_f[2], "%)")
+
+# --- PCA according to biological variables ---
+
+# Conditions in females
+#Base for all plots
+theme_pca <- theme_minimal() +
+  theme(plot.title = element_text(size = 11, face = "bold"))
+
+p_condition_f <- ggplot(pca_f, 
+                      aes(x = PC1, y = PC2, 
+                          color = condition, 
+                          label = name)) +
+  geom_point(size = 3) +
+  labs(x = x_lab, y = y_lab, title = "A — Condition") +
+  theme_pca
+
+# ANOVA
+summary(aov(PC1 ~ condition, data = pca_f))
+summary(aov(PC2 ~ condition, data = pca_f))
+
+# Exposure batch in females
+pca_f$exposure <- as.factor(metadata[pca_f$name, "exposure"])
+p_exposure_f <- ggplot(pca_f, 
+                     aes(x = PC1, y = PC2, 
+                         color = exposure,
+                         label = name)) +
+  geom_point(size = 3) +
+  labs(x = x_lab, y = y_lab, title = "C — Exposure batch") +
+  theme_pca
+
+# Correlation
+cor.test(pca_f$PC1, as.numeric(as.factor(pca_f$exposure)))
+cor.test(pca_f$PC2, as.numeric(as.factor(pca_f$exposure)))
+
+# Figure 3 - plots PCA biological variables females
+ggarrange(p_condition_f, p_exposure_f, ncol = 2)
+
+# --- PCA according to technical variables ---
+
+#RIN
+p_RIN_f <- ggplot(pca_f, aes(x = PC1, y = PC2, color = RIN)) +
+  geom_point(size = 3) +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_pca +
+  ggtitle("PCA colored by RIN")
+
+# Correlation
+cor.test(pca_f$PC1, pca_f$RIN)
+cor.test(pca_f$PC2, pca_f$RIN)
+
+# Duplication rate in females
+p_duplication_f <- ggplot(pca_f, 
+                aes(x = PC1, y = PC2, 
+                    color = dup_rate,
+                   )) +
+  geom_point(size = 3) +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(x = x_lab, y = y_lab, title = "E — Duplication rate") +
+  theme_pca
+
+# Correlation
+cor.test(pca_f$PC1, pca_f$dup_rate)
+cor.test(pca_f$PC2, pca_f$dup_rate)
+
+# Size factors in females
+p_sf_f <- ggplot(pca_f, 
+               aes(x = PC1, y = PC2, 
+                   color = size_factor,
+                   )) +
+  geom_point(size = 3) +
+  scale_color_gradient(low = "purple", high = "yellow") +
+  labs(x = x_lab, y = y_lab, title = "F — Size factor") +
+  theme_pca
+
+# Correlation
+cor.test(pca_f$PC1, pca_f$size_factor)
+cor.test(pca_f$PC2, pca_f$size_factor)
+
+# 5'-3' bias females
+p_bias_f <- ggplot(pca_f, 
+                 aes(x = PC1, y = PC2, 
+                     color = bias_5_3,
+                     )) +
+  geom_point(size = 3) +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(x = x_lab, y = y_lab, title = "G — 5'-3' bias") +
+  theme_pca
+
+# Correlation
+cor.test(pca_f$PC1, pca_f$bias_5_3)
+cor.test(pca_f$PC2, pca_f$bias_5_3)
+
+# Proper pairs females
+p_ppairs_f <- ggplot(pca_f, 
+               aes(x = PC1, y = PC2, 
+                   color = proper_pairs,
+                   )) +
+  geom_point(size = 3) +
+  scale_color_gradient(low = "red", high = "blue") +
+  labs(x = x_lab, y = y_lab, title = "H — Proper pairs") +
+  theme_pca
+
+# Correlation
+cor.test(pca_f$PC1, pca_f$proper_pairs)
+cor.test(pca_f$PC2, pca_f$proper_pairs)
+
+# Arrange all technical plots together
+ggarrange(p_RIN_f,p_duplication_f, p_sf_f, p_bias_f, p_ppairs_f, ncol = 2, nrow = 4)
+
+# Build the correlation summary table
+pca_cor_table_f <- data.frame(
+  Variable = c("Condition","Exposure batch", "RIN", "Duplication rate", "Size factor", "5'-3' bias", 
+               "Proper pairs"),
+  PC1_cor_score = c(0.684,-0.287, -0.275,-0.501, 0.644, -0.257, 0.448),
+  PC1_p_value = c(0.684, 0.139, 0.156, 0.007, 0.0002, 0.187, 0.017),
+  PC1_sig = c("ns", "ns", "ns", "*", "**", "ns", "*"),
+  PC2_r_cor_score = c(0.957,-0.372, 0.043, 0.112, 0.021, 0.256, -0.149),
+  PC2_p_value = c(0.488, 0.051, 0.827, 0.569, 0.916, 0.188, 0.449),
+  PC2_sig = c("ns", "borderline", "ns", "ns", "ns", "ns", "ns"),
+  Overall_significance = c("none","bordeline","none","strong","strong","none","moderate"),
+  stringsAsFactors = FALSE
+)
+
+kable(pca_cor_table_f,
+      col.names = c("Variable", "r/F", "p-value", "Sig.",
+                    "r/F", "p-value", "Sig.", "Overall significance"),
+      caption = "Correlation of technical and biological variables 
+      with principal components (rlog transformation, n=28), Strong = significant in both PCs or |r| > 0.5 in one PC, Moderate = significant in one PC with |r| 0.3–0.5, None = not significant in either PC.",
+      align = c("l","r","r","c","r","r","c","l")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  add_header_above(c(" " = 1,
+                     "PC1 (76%)" = 3,
+                     "PC2 (6%)" = 3,
+                     " " = 1))
+
+```
+PC1 was significantly driven by size factor, duplication rate, and proper pairs. Exposure replicate and RIN were not significant. PC2 showed no significant associations with any variable, with exposure replicate borderline. Experimental condition remained non-significant on both PCs. We observe a technical gradient along PC1. 
+
+To assess whether the technical gradient along PC1 was driven by individual extreme samples rather than being a dataset-wide characteristic, a sensitivity PCA was performed after removing the two samples with the most extreme size factors: Ctrl8F2 (SF=4.18) and Ctrl8F3 (SF=0.48, also flagged for poor QC metrics). These two samples represented opposite ends of the size factor distribution and were therefore the most likely candidates to be driving the technical gradient artificially.
+
+```{r outliers_identification}
+# Check which samples are driving PC1
+pca_f_sorted <- pca_f[order(pca_f$PC1), ]
+
+cat("\nTop 5 PC1 (most positive):\n")
+print(pca_f_sorted[(nrow(pca_f_sorted)-4):nrow(pca_f_sorted), 
+                    c("name", "condition", "PC1", 
+                      "size_factor", "dup_rate")])
+
+cat("Bottom 5 PC1 (most negative):\n")
+print(pca_f_sorted[1:5, c("name", "condition", "PC1", 
+                            "size_factor", "dup_rate")])
+
+# Note: Ctrl8F3 is not an extreme outlier, here the most extreme samples are Ctrl8F2 and Acid21F3
+
+# Check the different variables for the samples flagged as outliers
+cat("\nQC metrics for flagged samples:\n")
+pca_f[pca_f$name %in% c("Ctrl8F3", "Ctrl8F2", 
+                          "Acid18F2", "AcidPFOS67F2","Acid21F3"), 
+      c("name", "condition", "PC1", "PC2",
+        "size_factor", "dup_rate", "bias_5_3", 
+        "proper_pairs")]
+
+# Sensitivity check: what happen when the worst outliers are removed:
+meta_f_clean <- metadata[!rownames(metadata) %in% 
+                               c("Ctrl8F2", "Ctrl8F3"), ]
+counts_f_clean <- counts[, rownames(meta_f_clean)]
+
+dds_f_clean <- DESeqDataSetFromMatrix(
+  countData = counts_f_clean,
+  colData   = meta_f_clean,
+  design    = ~ 1
+)
+
+rld_f_clean <- rlog(dds_f_clean, blind = TRUE)
+
+pca_f_clean <- plotPCA(rld_f_clean,
+                        intgroup = c("condition", "sex"),
+                        returnData = TRUE)
+percentVar_clean <- round(100 * attr(pca_f_clean, "percentVar"))
+cat("PC1:", percentVar_clean[1], "%\n")
+cat("PC2:", percentVar_clean[2], "%\n")
+# PC are not improved
+
+# Check size factor correlation
+pca_f_clean$size_factor <- meta_f_clean[pca_f_clean$name, "size_factor"]
+cor.test(pca_f_clean$PC1, pca_f_clean$size_factor)
+# size factor correlation unchanged (r = 0.67)
+```
+
+After removal, the size factor correlation with PC1 remained strong and essentially unchanged (r=0.67, p=0.0002 versus r=0.644 before removal), and the variance explained by PC1 did not decrease. This confirms that the technical gradient is a dataset-wide characteristic present across all samples, not an artefact of one or two extreme samples. We performed a second sensitivity check by removing all the potential outliers. 
+
+```{r sensitivty_check_2}
+# Remove ALL flagged samples as:
+# Ctrl8F3: fails 3 QC metrics
+# Ctrl8F2: extreme size factor
+# Acid18F2: highest 5'-3' bias, low proper pairs
+# AcidPFOS67F2: elevated 5'-3' bias, low proper pairs
+# Acid21F3: extreme PC1 position
+
+meta_f_allflagged <- metadata[
+  !rownames(metadata) %in%
+    c("Ctrl8F2", "Ctrl8F3", 
+      "Acid18F2", "AcidPFOS67F2", 
+      "Acid21F3"), ]
+
+counts_f_allflagged <- counts[, rownames(meta_f_allflagged)]
+
+dds_f_allflagged <- DESeqDataSetFromMatrix(
+  countData = counts_f_allflagged,
+  colData   = meta_f_allflagged,
+  design    = ~ 1)
+
+rld_f_allflagged <- rlog(dds_f_allflagged, blind = TRUE)
+
+pca_f_allflagged <- plotPCA(rld_f_allflagged,
+                             intgroup = c("condition", "sex"),
+                             returnData = TRUE)
+
+percentVar_allflagged <- round(
+  100 * attr(pca_f_allflagged, "percentVar"))
+cat("After removing all flagged samples:\n")
+cat("PC1:", percentVar_allflagged[1], "%\n")
+cat("PC2:", percentVar_allflagged[2], "%\n")
+
+pca_f_allflagged$size_factor <- as.numeric(
+  meta_f_allflagged[pca_f_allflagged$name, "size_factor"])
+
+cor.test(pca_f_allflagged$PC1, pca_f_allflagged$size_factor)
+
+# Check remaining sample sizes per condition
+cat("\nSample sizes after removing all flagged samples:\n")
+print(table(meta_f_allflagged$condition))
+```
+Removing all five flagged samples did not substantially reduce the technical gradient and the size factor correlation with PC1 remained strong (r=0.596, p=0.003 versus r=0.644 before removal), confirming that the technical variation is a dataset-wide characteristic inherent to the library quality across all samples rather than being driven by individual outliers. Furthermore, removing all flagged samples reduced the Acid condition to n=1 and AcidPFOS to n=2, making differential expression analysis statistically impossible for these conditions. 
+
+To inform individual exclusion decisions, the quality metrics of all flagged samples were compared to the dataset median. The full distribution of 5'-3' bias was also examined to identify natural breaks in the data that could justify exclusion thresholds.
+
+```{r exclusion}
+
+# Get the dataset medians as reference
+cat("Dataset medians (n=28 females):\n")
+cat("Duplication rate:", median(metadata$duplication_rate), "\n")
+cat("5-3 bias:", median(metadata$five_three_prim_bias), "\n")
+cat("Proper pairs:", median(metadata$proper_pairs), "\n")
+
+# Get all the flagged samples to compare to medians
+cat("\nFlagged sample metrics:\n")
+flagged_samples <- c("Ctrl8F2", "Ctrl8F3", 
+                     "Acid18F2", "AcidPFOS67F2", "Acid21F3")
+
+metadata[flagged_samples,
+             c("condition", "duplication_rate",
+               "five_three_prim_bias", "proper_pairs")]
+
+# Full distribution of 5'-3' bias to assess outliers
+cat("\nFull distribution of 5'-3' bias (sorted):\n")
+sort(metadata$five_three_prim_bias)
+```
+# Outlier assessment and sample exclusion decision
+
+PCA identified substantial spread along PC1 (76%) with several samples showing extreme positions. One sample showed a notable separation on PC2 (Acid18F2, PC2=+24.1). However, PCA position alone was not used as a criterion for exclusion. All exclusion decisions were based on technical quality metrics from the MultiQC report, following a consistent rule: a sample was excluded only if it failed multiple quality metrics simultaneously and its removal did not reduce any experimental condition below n=3.Applying this rule, five samples were assessed:
+
+**Ctrl8F2** shows an extreme size factor (SF=4.18) and anomalously low duplication rate (17.2%), positioning it as a strong PCA outlier. However its 5'-3' bias (1.43) and proper pairs (59.4%) are within acceptable range. To assess whether it was driving the technical gradient along PC1, two sensitivity PCAs were performed: first removing Ctrl8F2 and Ctrl8F3 only, then removing all five flagged samples simultaneously. In both cases the size factor correlation with PC1 remained strong and significant (r=0.67 and r=0.60 respectively), confirming that the technical gradient is a dataset-wide characteristic and not driven by this sample. Ctrl8F2 is therefore **retained** and its extreme library complexity is handled internally by DESeq2 size factor normalisation.
+
+**Acid21F3** shows an extreme PC1 position (+86.1) but its quality metrics are acceptable (duplication 32.3%, 5'-3' bias 1.55, proper pairs 50.0%). Its PCA position likely reflects biological variability rather than technical failure. Acid21F3 is therefore **retained**.
+
+**Ctrl8F3** fails on three quality metrics simultaneously: duplication rate 70.5% (dataset median 54.75%), 5'-3' bias 1.74 (dataset median 1.54), and proper pairs 21.9% (dataset median 35.6%). The 5'-3' bias distribution revealed a natural break after 1.69, with Ctrl8F3 clearly separated from the main cluster. As a control sample, its removal leaves n=5 control females which is sufficient. Ctrl8F3 is **excluded** from all analyses.
+
+**Acid18F2** shows elevated 5'-3' bias (1.90 — highest in the dataset) and low proper pairs (26.2%). However its removal would reduce the Acid condition to n=2 females, which is insufficient for reliable dispersion estimation in DESeq2. Acid18F2 is **retained in the main analysis but excluded in the sensitivity analysis**.
+
+**AcidPFOS67F2** shows elevated 5'-3' bias (1.80) and low proper pairs (26.4%). Same reasoning as Acid18F2: removal would reduce AcidPFOS to n=2. AcidPFOS67F2 is **retained in the main analysis but excluded in the sensitivity analysis**.
+
+# Final sample selection
+Based on the outlier assessment above, two sample sets were defined for all downstream analyses. The main analysis retained all samples except Ctrl8F3. The sensitivity analysis additionally excluded Acid18F2 and AcidPFOS67F2 to assess whether borderline samples affect the conclusions.
+
+```{r samples_selection}
+
+# Main analysis
+meta_f_main <- metadata[
+  rownames(metadata) != "Ctrl8F3", ]
+counts_f_main <- counts[, rownames(meta_f_main)]
+
+# Sensitivity analysis: females, all three flagged samples removed
+meta_f_sensitivity <- metadata[
+  !rownames(metadata) %in% 
+    c("Ctrl8F3", "Acid18F2", "AcidPFOS67F2"), ]
+counts_f_sensitivity <- counts[, rownames(meta_f_sensitivity)]
+
+# Check sample distributions
+cat("MAIN n =", nrow(meta_f_main), "\n")
+print(table(meta_f_main$condition, meta_f_main$exposure))
+
+cat("SENSITIVITY n =", nrow(meta_f_sensitivity), "\n")
+print(table(meta_f_sensitivity$condition, meta_f_sensitivity$exposure))
+```
+# DESeq2 - main analysis
+
+The DESeq2 model includes the exposure batch as a covariate and the exposure conditions as the variable of interest (~ exposure + condition). Including the exposure batch accounts for systematic differences between the two independent biological replicate experiments. For the condition comparison, control is the reference group for all pairwise comparisons.
+Genes with very low counts were removed before fitting the model. We retained only the genes with at least 10 counts in a minimum of 3 samples. This pre-filtering step improves statistical power by reducing the number of tests submitted to multiple testing correction.
+
+```{r DESeq2_main}
+
+# Set control as reference
+meta_f_main$condition <- relevel(
+  factor(meta_f_main$condition), ref = "Ctrl")
+meta_f_main$exposure  <- factor(meta_f_main$exposure)
+
+# Build the DESeq2 object
+dds_main_f <- DESeqDataSetFromMatrix(countData = counts_f_main,
+                              colData = meta_f_main,
+                              design= ~ exposure + condition)
+
+# Filter genes with low count 
+# Keep genes with >= 10 counts in at least 3 samples
+keep <- rowSums(counts(dds_main_f) >= 10) >= 3
+dds_main_f <- dds_main_f[keep, ]
+
+cat("Genes before filtering:", nrow(counts_f_main), "\n")
+cat("Genes after filtering:", nrow(dds_main_f), "\n")
+# 32520 -> 15989 genes retained (49%) — standard for liver RNA-seq
+```
+# Run the DESEQ model
+
+```{r fit_model}
+dds_main_f <- DESeq(dds_main_f)
+
+# Dispersion estimates diagnostic plot
+plotDispEsts(dds_main_f,
+             main = "Dispersion estimates females primary analysis")
+
+# Cook's distance 
+boxplot(log10(assays(dds_main_f)[["cooks"]]),
+        range = 0,
+        las = 2,
+        main = "Cook's distance per sample",
+        ylab = "log10(Cook's distance)",
+        col = "lightblue")
+
+# Check model terms
+cat("\nModel terms:\n")
+print(resultsNames(dds_main_f))
+
+```
+
+Cook's distance per sample showed comparable distributions across all retained samples, indicating that no single sample exerts disproportionate influence on the differential expression results across the transcriptome. 
+
+# Comparisons betwen each condition and control 
+Pairwise Wald tests were performed for each condition against Control with independent filtering: DESeq2 automatically finds the optimal count threshold per comparison that maximizes the number of genes passing multiple testing correction. The Cook's distance cutoff was also enabled (setting adjusted p-values to NA for genes with extreme outlier counts in individual samples). P-adjusted p-values are obtained after applying Benjamini-Hochberg correction. 
+
+```{r comparisons_control}
+# Check comparisons by extracting Wald test results for each condition vs. Control
+res_Acid <- results(dds_main_f,
+                    contrast = c("condition", "Acid", "Ctrl"),
+                    independentFiltering = TRUE,
+                    cooksCutoff = TRUE)
+res_Temp    <- results(dds_main_f,
+                       contrast = c("condition", "Temp", "Ctrl"),
+                       independentFiltering = TRUE,
+                       cooksCutoff = TRUE)
+
+res_PFOS    <- results(dds_main_f,
+                       contrast = c("condition", "PFOS", "Ctrl"),
+                       independentFiltering = TRUE,
+                       cooksCutoff = TRUE)
+
+res_AcidTemp <- results(dds_main_f,
+                        contrast = c("condition", "AcidTemp", "Ctrl"),
+                        independentFiltering = TRUE,
+                        cooksCutoff = TRUE)
+
+res_PFOSTemp <- results(dds_main_f,
+                        contrast = c("condition", "PFOSTemp", "Ctrl"),
+                        independentFiltering = TRUE,
+                        cooksCutoff = TRUE)
+
+res_AcidPFOS <- results(dds_main_f,
+                        contrast = c("condition", "AcidPFOS", "Ctrl"),
+                        independentFiltering = TRUE,
+                        cooksCutoff = TRUE)
+
+res_APT     <- results(dds_main_f,
+                       contrast = c("condition", "APT", "Ctrl"),
+                       independentFiltering = TRUE,
+                       cooksCutoff = TRUE)
+
+# Summaries of results at p.adj < 0.05
+summary(res_Acid, alpha = 0.05)
+summary(res_Temp, alpha = 0.05)
+summary(res_PFOS, alpha = 0.05)
+summary(res_AcidTemp, alpha = 0.05)
+summary(res_PFOSTemp, alpha = 0.05)
+summary(res_AcidPFOS, alpha = 0.05)
+summary(res_APT, alpha = 0.05)
+```
+
+The 184 outlier genes detected in all comparisons reflect Cook's distance filtering applied at the model level. These genes received NA adjusted p-values and were excluded from multiple testing correction. 
+
+# LFC shrinkage 
+
+LFC shrinkage was applied using the ashr method (Stephens 2017) to obtain reliable log2 fold change estimates. This reduces noisy fold change estimates from lowly expressed genes toward zero while leaving well-estimated fold changes from highly expressed genes unchanged. The shrinkage does not affect the statistical significance of results (padj values are not modified) but improves the reliability of fold change estimates used for filtering and visualization. This is important for datasets with small n per condition and high variability.
+The ashr method was selected over apeglm because it supports contrast-based comparisons between experimental conditions (like combination vs single stressor), while apeglm only allows coefficient based comparisons against the reference.
+
+```{r shrinkage, message = FALSE,}
+# LFC shrinkage with ashr
+resLFC_Acid <- lfcShrink(dds_main_f,
+                          contrast = c("condition", "Acid", "Ctrl"),
+                          type = "ashr")
+resLFC_Temp <- lfcShrink(dds_main_f,
+                          contrast = c("condition", "Temp", "Ctrl"),
+                          type = "ashr")
+resLFC_PFOS <- lfcShrink(dds_main_f,
+                          contrast = c("condition", "PFOS", "Ctrl"),
+                          type = "ashr")
+resLFC_AcidTemp <- lfcShrink(dds_main_f,
+                               contrast = c("condition", "AcidTemp", "Ctrl"),
+                               type = "ashr")
+resLFC_PFOSTemp <- lfcShrink(dds_main_f,
+                               contrast = c("condition", "PFOSTemp", "Ctrl"),
+                               type = "ashr")
+resLFC_AcidPFOS <- lfcShrink(dds_main_f,
+                               contrast = c("condition", "AcidPFOS", "Ctrl"),
+                               type = "ashr")
+resLFC_APT <- lfcShrink(dds_main_f,
+                         contrast = c("condition", "APT", "Ctrl"),
+                         type = "ashr")
+
+# Verify all summaries match previous results
+summary(resLFC_Acid, alpha = 0.05)
+summary(resLFC_Temp, alpha = 0.05)
+summary(resLFC_PFOS, alpha = 0.05)
+summary(resLFC_AcidTemp, alpha = 0.05)
+summary(resLFC_PFOSTemp, alpha = 0.05)
+summary(resLFC_AcidPFOS, alpha = 0.05)
+summary(resLFC_APT, alpha = 0.05)
+```
+
+# Get significant genes
+
+Genes were considered differentially expressed if the adjusted p-value < 0.05 after Benjamini-Hochberg correction, and the log2 fold change ≥ log2(1.5), corresponding to a minimum 1.5-fold change in either direction. The log2(1.5) threshold was chosen as a biologically meaningful minimum effect size given the high within-group variability in this dataset. All results use shrunken LFC estimates from the previous step.
+
+```{r comparisons}
+
+# Get genes names
+gene_annotations <- data.frame(
+  gene_id   = rownames(counts),
+  gene_name = genes_names,
+  stringsAsFactors = FALSE
+)
+rownames(gene_annotations) <- gene_annotations$gene_id
+
+# Check the annotation table looks correct
+head(gene_annotations)
+
+# Create a function to get significant gene in each comparison
+get_sig_genes <- function(res, condition_name,
+                           padj_thresh = 0.05,
+                           lfc_thresh = log2(1.5)) {
+  
+  res_df <- as.data.frame(res)
+  res_df$gene_id   <- rownames(res_df)
+  res_df$gene_name <- gene_annotations[rownames(res_df), "gene_name"]
+  res_df$condition <- condition_name
+  
+  # Classify each gene
+  res_df$direction <- "NS"  # default
+  res_df$direction[is.na(res_df$padj)] <- "NA"
+  res_df$direction[!is.na(res_df$padj) & 
+                 res_df$padj < padj_thresh & 
+                 res_df$log2FoldChange >= lfc_thresh] <- "UP"
+  res_df$direction[!is.na(res_df$padj) & 
+                 res_df$padj < padj_thresh & 
+                 res_df$log2FoldChange <= -lfc_thresh] <- "DOWN"
+  
+  res_df[order(res_df$padj, na.last = TRUE), ]
+}
+
+# Apply to all vs Control comparisons
+results_Acid     <- get_sig_genes(resLFC_Acid,     "Acid")
+results_Temp     <- get_sig_genes(resLFC_Temp,     "Temp")
+results_PFOS     <- get_sig_genes(resLFC_PFOS,     "PFOS")
+results_AcidTemp <- get_sig_genes(resLFC_AcidTemp, "AcidTemp")
+results_PFOSTemp <- get_sig_genes(resLFC_PFOSTemp, "PFOSTemp")
+results_AcidPFOS <- get_sig_genes(resLFC_AcidPFOS, "AcidPFOS")
+results_APT      <- get_sig_genes(resLFC_APT,      "APT")
+
+# DEG summary
+deg_summary <- sapply(
+  list(Acid     = results_Acid,
+       Temp     = results_Temp,
+       PFOS     = results_PFOS,
+       AcidTemp = results_AcidTemp,
+       PFOSTemp = results_PFOSTemp,
+       AcidPFOS = results_AcidPFOS,
+       APT      = results_APT),
+  function(r) c(
+    UP    = sum(r$direction == "UP"),
+    DOWN  = sum(r$direction == "DOWN"),
+    TOTAL = sum(r$direction %in% c("UP", "DOWN"))
+  )
+)
+
+cat("DEG summary (padj < 0.05 AND |log2FC| >= log2(1.5)):\n")
+print(t(deg_summary))
+```
+
+# LFC shrinkage single vs. multiple stressor
+
+To determine whether each combination treatment produces a response beyond what any individual stressor alone would predict, pairwise comparisons were made between each combination and its single stressors. For example, AcidTemp was compared to both Acid alone and Temp alone. A low DEG count in a comparison means the two conditions have similar transcriptional profiles = the combination is similar to the single stressor. A high DEG count means the combination is different from the stressor alone.
+
+These comparisons used the same ashr LFC shrinkage and the same significance thresholds as the vs-Control comparisons (padj < 0.05, |log2FC| ≥ log2(1.5)).
+
+```{r combinations_vs_single_stressor, message = FALSE}
+# Single vs combination comparisons
+
+#AcidTemp vs. Acid and Temp
+resLFC_AcidTemp_vs_Acid <- lfcShrink(dds_main_f,
+  contrast = c("condition", "AcidTemp", "Acid"), 
+  type = "ashr")
+
+resLFC_AcidTemp_vs_Temp <- lfcShrink(dds_main_f,
+  contrast = c("condition", "AcidTemp", "Temp"), 
+  type = "ashr")
+
+#PFOSTemp vs. PFOS and Temp
+resLFC_PFOSTemp_vs_PFOS <- lfcShrink(dds_main_f,
+  contrast = c("condition", "PFOSTemp", "PFOS"), 
+  type = "ashr")
+
+resLFC_PFOSTemp_vs_Temp <- lfcShrink(dds_main_f,
+  contrast = c("condition", "PFOSTemp", "Temp"), 
+  type = "ashr")
+
+#AcidPFOS vs. Acid and PFOS
+resLFC_AcidPFOS_vs_Acid <- lfcShrink(dds_main_f,
+  contrast = c("condition", "AcidPFOS", "Acid"), 
+  type = "ashr")
+
+resLFC_AcidPFOS_vs_PFOS <- lfcShrink(dds_main_f,
+  contrast = c("condition", "AcidPFOS", "PFOS"), 
+  type = "ashr")
+
+#APT vs. Acid, Temp and PFOS
+resLFC_APT_vs_Acid <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "Acid"), 
+  type = "ashr")
+
+resLFC_APT_vs_Temp <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "Temp"), 
+  type = "ashr")
+
+resLFC_APT_vs_PFOS <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "PFOS"), 
+  type = "ashr")
+
+#APT vs. double stressors
+resLFC_APT_vs_AcidTemp <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "AcidTemp"), 
+  type = "ashr")
+
+resLFC_APT_vs_PFOSTemp <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "PFOSTemp"), 
+  type = "ashr")
+
+resLFC_APT_vs_AcidPFOS <- lfcShrink(dds_main_f,
+  contrast = c("condition", "APT", "AcidPFOS"), 
+  type = "ashr")
+
+# Apply get_sig_genes to all comparisons
+results_AcidTemp_vs_Acid <- get_sig_genes(
+  resLFC_AcidTemp_vs_Acid, "AcidTemp_vs_Acid")
+results_AcidTemp_vs_Temp <- get_sig_genes(
+  resLFC_AcidTemp_vs_Temp, "AcidTemp_vs_Temp")
+results_PFOSTemp_vs_PFOS <- get_sig_genes(
+  resLFC_PFOSTemp_vs_PFOS, "PFOSTemp_vs_PFOS")
+results_PFOSTemp_vs_Temp <- get_sig_genes(
+  resLFC_PFOSTemp_vs_Temp, "PFOSTemp_vs_Temp")
+results_AcidPFOS_vs_Acid <- get_sig_genes(
+  resLFC_AcidPFOS_vs_Acid, "AcidPFOS_vs_Acid")
+results_AcidPFOS_vs_PFOS <- get_sig_genes(
+  resLFC_AcidPFOS_vs_PFOS, "AcidPFOS_vs_PFOS")
+results_APT_vs_Acid <- get_sig_genes(
+  resLFC_APT_vs_Acid, "APT_vs_Acid")
+results_APT_vs_Temp <- get_sig_genes(
+  resLFC_APT_vs_Temp, "APT_vs_Temp")
+results_APT_vs_PFOS <- get_sig_genes(
+  resLFC_APT_vs_PFOS, "APT_vs_PFOS")
+results_APT_vs_AcidTemp <- get_sig_genes(
+  resLFC_APT_vs_AcidTemp, "APT_vs_AcidTemp")
+results_APT_vs_PFOSTemp <- get_sig_genes(
+  resLFC_APT_vs_PFOSTemp, "APT_vs_PFOSTemp")
+results_APT_vs_AcidPFOS <- get_sig_genes(
+  resLFC_APT_vs_AcidPFOS, "APT_vs_AcidPFOS")
+
+# DEG count summary 
+deg_summary_combinations <- sapply(
+  list(AcidTemp_vs_Acid   = results_AcidTemp_vs_Acid,
+       AcidTemp_vs_Temp   = results_AcidTemp_vs_Temp,
+       PFOSTemp_vs_PFOS   = results_PFOSTemp_vs_PFOS,
+       PFOSTemp_vs_Temp   = results_PFOSTemp_vs_Temp,
+       AcidPFOS_vs_Acid   = results_AcidPFOS_vs_Acid,
+       AcidPFOS_vs_PFOS   = results_AcidPFOS_vs_PFOS,
+       APT_vs_Acid        = results_APT_vs_Acid,
+       APT_vs_Temp        = results_APT_vs_Temp,
+       APT_vs_PFOS        = results_APT_vs_PFOS,
+       APT_vs_AcidTemp    = results_APT_vs_AcidTemp,
+       APT_vs_PFOSTemp    = results_APT_vs_PFOSTemp,
+       APT_vs_AcidPFOS    = results_APT_vs_AcidPFOS),
+  function(r) c(
+    UP    = sum(r$direction == "UP"),
+    DOWN  = sum(r$direction == "DOWN"),
+    TOTAL = sum(r$direction %in% c("UP","DOWN"))
+  )
+)
+
+cat("DEG summary — single vs combination comparisons:\n")
+print(t(deg_summary_combinations))
+```
+
+The number of DEGs in each comparison reveals which stressor dominates each combination response and whether any combination produces a synergistic transcriptional profile. 
+
+# Interpretation:
+
+**AcidTemp vs single stressors:**
+AcidTemp vs Acid: 200 DEGs --> AcidTemp is substantially different from Acid alone
+AcidTemp vs Temp: only 30 DEGs --> AcidTemp is very similar to Temp alone
+Interpretation: **Temperature drives the AcidTemp response, acid adds little**
+
+**PFOSTemp vs single stressors:**
+PFOSTemp vs PFOS: 761 DEGs --> very different from PFOS alone
+PFOSTemp vs Temp: 1779 DEGs --> very different from Temp alone
+Interpretation: **PFOSTemp is  synergistic, it is not just one stressor driving the response**
+
+**AcidPFOS vs single stressors:**
+AcidPFOS vs Acid: 99 DEGs
+AcidPFOS vs PFOS: only 45 DEGs --> AcidPFOS is similar to PFOS alone
+Interpretation: **PFOS drives the AcidPFOS response, acid adds a little**
+
+**APT vs combinations:**
+APT vs PFOSTemp: 1522 DEGs --> **APT is dramatically different from PFOSTemp**
+APT vs AcidPFOS: only 10 DEGs --> **APT is almost identical to AcidPFOS**
+APT vs AcidTemp: only 18 DEGs --> **APT is almost identical to AcidTemp**
+Interpretation: Adding the third stressor to PFOSTemp completely changes the response. It seems that adding acid to PFOSTemp dampens the response. 
+
+# P-value distribution diagnostics
+
+P-value histograms can be used as diagnostic for assessing whether the statistical model is behaving correctly for each comparison. Under a well-specified model, genes with no real difference between conditions produce uniformly distributed p-values between 0 and 1. Genes with real differential expression produce an enrichment of small p-values near zero on top of this uniform background. Four patterns are possible:
+* A spike near zero with a flat background = good signal --> real DEGs exist and the model is well specified.
+* A perfectly flat distribution = true null result (no differential expression) or underpowered comparison.
+* A spike near 1 instead of near 0 = model misspecification --> confounding variable not accounted for in the design formula or high within-group variance relative to between-group differences. 
+* An irregular or bimodal distribution = more serious problem needing investigation
+
+Used to know if the signal is real or an issue with samples statistical power
+```{r distribution_diagnostic}
+par(mfrow = c(2,4))
+for(nm in c("Acid","Temp","PFOS","AcidTemp",
+            "PFOSTemp","AcidPFOS","APT")) {
+  res <- get(paste0("results_", nm))
+  hist(res$pvalue, breaks = 50,
+       main = nm, xlab = "p-value",
+       col = "lightblue")
+}
+par(mfrow = c(1,1))
+```
+
+Acid and Temp have anti-conservative distributions with p-values enriched near 1 rather than near 0. This suggests that the model cannot reliably detect differential expression for these conditions, either due to insufficient statistical power or high within-group variability relative to between-group differences. All other conditions have good p-value distributions with varying degrees of enrichment near zero, consistent with real differential expression signals.
+
+# Within-group variance assessement
+
+To understand why Acid and Temp show anti-conservative p-value distributions, we examine the within-group biological variability for each condition. DESeq2 estimates a shared dispersion across conditions so if some conditions have higher within-group variance than others, the model have difficulties to distinguish biological signal from noise for those specific comparisons.
+The within-group variance is calculated using DESeq2-normalised counts, which removes library size differences between samples before computing variance. The median variance across all genes is used as a summary statistic per condition.
+
+```{r group_variance}
+norm_counts <- counts(dds_main_f, normalized = TRUE)
+ 
+# Mean and variance per condition
+ for(cond in levels(meta_f_main$condition)) {
+     samples <- rownames(meta_f_main)[meta_f_main$condition == cond]
+     cat(cond, "— n =", length(samples), 
+         "| median variance:", 
+         round(median(apply(norm_counts[, samples], 1, var))), "\n")
+}
+```
+Within-group variance differs across conditions. Ctrl, Acid and Temp show higher variance than PFOSTemp, AcidTemp and APT. Several factors contribute to this pattern.
+
+During the developmental exposure phase (0-28 dpf), each condition within each exposure replicate was maintained in a single tank. Fish were subsequently transferred to clean water rearing conditions from 32 dpf onward and maintained until sampling at 15-17 months, during which they were distributed across one to three rearing tanks depending on survival numbers. The transcriptomic analysis therefore reflects the lasting molecular consequences of early developmental exposure rather than acute responses to current tank conditions, which reduces but does not eliminate concerns about tank-level pseudoreplication during the exposure phase.
+
+Conditions with samples from both exposure replicates, including Ctrl, Acid, Temp and PFOS, contain fish from two independent experiments with different breeding groups, different exposure tanks, and approximately one month age difference at sampling. This introduces additional biological variability from genetic background differences and minor environmental variation between replicate experiments. PFOSTemp samples derive exclusively from exposure replicate 3, meaning all fish share the same age, breeding group and exposure tank history. This homogeneity likely contributes to the lower within-group variance observed in PFOSTemp and should be considered when interpreting the consistency of its transcriptional response.
+
+The exposure replicate covariate in the DESeq2 model accounts for systematic mean differences between replicate experiments but does not correct for tank-level effects or differences in biological variability between groups. The practical consequence is reduced statistical power for conditions with higher variance, particularly Acid and Temp. Detected DEGs in these conditions remain statistically valid but real effects may have been missed. GSEA on the full ranked gene list is therefore used as the primary analysis for Acid and Temp as pathway-level analysis is more robust to high individual variability than single-gene testing.
+
+# Volcano plots
+
+Volcano plots visualize the relationship between statistical significance and effect size for all tested genes simultaneously. Each point represents one gene. The x-axis shows the shrunken log2 fold change with positive values indicating higher expression and negative values indicating lower expression in teh treatment compared to control. The y-axis shows -log10(adjusted p-value): higher points are more statistically significant. Dashed vertical lines mark the log2(1.5) fold change threshold and the dashed horizontal line marks padj = 0.05. The top 15 most significant DEGs are labelled by gene name. Genes with NA adjusted p-values (Cook's distance outliers and independently filtered genes) are not shown on the plot. 
+```{r volcano, warning = FALSE}
+library(ggrepel)
+
+make_volcano <- function(res_df, title,
+                         padj_thresh = 0.05,
+                         lfc_thresh  = log2(1.5))
+                         {
+# Assign colour based on the direction of expression change  
+  res_df$color <- factor(
+    ifelse(res_df$direction == "UP",   "Up",
+    ifelse(res_df$direction == "DOWN", "Down", "NS")),
+    levels = c("Up", "Down", "NS"))
+  
+# Label only genes with known names
+  labels <- res_df[res_df$direction %in% c("UP","DOWN") &
+                       !grepl("^ENSDARG", res_df$gene_name) &
+                       !grepl("^si:", res_df$gene_name) &
+                       !grepl("^zgc:", res_df$gene_name) &
+                       !is.na(res_df$gene_name), ]
+# Take only the most significant ones
+  top_genes <- head(labels[order(labels$padj), ], 10)
+  
+  ggplot(res_df, aes(x = log2FoldChange,
+                     y = -log10(padj),
+                     color = color)) +
+    geom_point(alpha = 0.5, size = 0.7) +
+    scale_color_manual(values = c("Up"   = "#D85A30",
+                                   "Down" = "#378ADD",
+                                   "NS"   = "#BBBBBB")) +
+    geom_vline(xintercept = c(-lfc_thresh, lfc_thresh),
+               linetype = "dashed", color = "grey40", linewidth = 0.4) +
+    geom_hline(yintercept = -log10(padj_thresh),
+               linetype = "dashed", color = "grey40", linewidth = 0.4) +
+    geom_text_repel(data        = top_genes,
+                    aes(label   = gene_name),
+                    size        = 3,
+                    max.overlaps = Inf,
+                    min.segment.length = 0,
+                    box.padding = 0.5,
+                    point.padding = 0.3,
+                    segment.color = "grey50",
+                    segment.size = 0.3,
+                    color = "black",
+                    fontface = "italic") +
+    labs(title  = title,
+         x      = "log2 fold change",
+         y      = "-log10(adjusted p-value)",
+         color  = NULL) +
+    theme_minimal(base_size = 10) +
+    theme(plot.title    = element_text(size = 11, face = "bold"),
+          legend.position = "bottom",
+          axis.title = element_text(size = 9))
+}
+
+# Generate all volcano plots vs Ctrl
+p_volc_Acid     <- make_volcano(results_Acid,     "Acid vs Ctrl")
+p_volc_Temp     <- make_volcano(results_Temp,     "Temp vs Ctrl")
+p_volc_PFOS     <- make_volcano(results_PFOS,     "PFOS vs Ctrl")
+p_volc_AcidTemp <- make_volcano(results_AcidTemp, "AcidTemp vs Ctrl")
+p_volc_PFOSTemp <- make_volcano(results_PFOSTemp, "PFOSTemp vs Ctrl")
+p_volc_AcidPFOS <- make_volcano(results_AcidPFOS, "AcidPFOS vs Ctrl")
+p_volc_APT      <- make_volcano(results_APT,      "APT vs Ctrl")
+
+p_volc_AcidTemp <- p_volc_AcidTemp + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+p_volc_PFOSTemp <- p_volc_PFOSTemp + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+p_volc_AcidPFOS <- p_volc_AcidPFOS + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+p_volc_APT      <- p_volc_APT      + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+
+p_volc_Acid
+p_volc_Temp
+p_volc_PFOS
+p_volc_AcidTemp
+p_volc_PFOSTemp
+p_volc_AcidPFOS
+p_volc_APT
+
+combined_volcano <- (p_volc_AcidTemp + p_volc_PFOSTemp) /
+                 (p_volc_AcidPFOS + p_volc_APT) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+combined_volcano
+```
+Volcano plots confirm the pattern observed in the DEG summary table. PFOSTemp shows the strongest response with 2220 DEGs, predominantly downregulated, with log2 fold changes extending beyond -20 for the most strongly suppressed genes. AcidTemp and AcidPFOS show moderate responses also dominated by downregulation. Acid and Temp show almost no significant genes, consistent with the high within-group variability identified above.
+Several genes appear as significant across multiple conditions. The gene zgc:123284 (predicted oxidoreductase) is upregulated in Acid, Temp and APT, suggesting a consistent response to stressor combinations independent of the specific stressor involved. In APT, the most prominent significant genes include per1a, per1b, cry1b, nfil3-5, core components of the circadian clock. This suggests that the triple stressor combination specifically disrupts circadian rhythm regulation in the liver. cry1b also appears in PFOS and PFOSTemp, indicating that circadian disruption may be partly driven by the PFOS component of the response.
+Gene-level interpretation is limited by the small sample sizes per condition. Pathway-level analysis using GSEA is presented in the following section to provide a more robust biological interpretation.
+
+## Stressors interaction analysis
+To identify which stressor drives each combination response and to detect emergent, non-additive transcriptomic profiles, the number of differentially expressed genes (DEGs, padj < 0.05, |log2FC| ≥ log2(1.5)) was computed for each combination versus its constituent single stressors, and for APT versus each double stressor. A low DEG count between a combination and one of its singles indicates that the single stressor dominates the combination response, while high DEG counts against both singles indicate an emergent, non-additive signature. The triple stressor APT was compared against each double combination to identify which constituents most strongly modify the APT response.
+
+```{r combination_vs_single_DEG_counts}
+# Count DEGs for each combination vs its single stressors
+# These numbers are used in Table 2 of the manuscript
+count_degs <- function(res, padj_cutoff = 0.05, lfc_cutoff = log2(1.5)) {
+  df <- as.data.frame(res)
+  df <- df[!is.na(df$padj), ]
+  up   <- sum(df$padj < padj_cutoff & df$log2FoldChange >=  lfc_cutoff)
+  down <- sum(df$padj < padj_cutoff & df$log2FoldChange <= -lfc_cutoff)
+  total <- up + down
+  c(up = up, down = down, total = total)
+}
+
+comparisons <- list(
+  list(combo = "AcidTemp", reference = "Acid", res = resLFC_AcidTemp_vs_Acid),
+  list(combo = "AcidTemp", reference = "Temp", res = resLFC_AcidTemp_vs_Temp),
+  list(combo = "AcidPFOS", reference = "Acid", res = resLFC_AcidPFOS_vs_Acid),
+  list(combo = "AcidPFOS", reference = "PFOS", res = resLFC_AcidPFOS_vs_PFOS),
+  list(combo = "PFOSTemp", reference = "PFOS", res = resLFC_PFOSTemp_vs_PFOS),
+  list(combo = "PFOSTemp", reference = "Temp", res = resLFC_PFOSTemp_vs_Temp),
+  list(combo = "APT", reference = "AcidTemp", res = resLFC_APT_vs_AcidTemp),
+  list(combo = "APT", reference = "AcidPFOS", res = resLFC_APT_vs_AcidPFOS),
+  list(combo = "APT", reference = "PFOSTemp", res = resLFC_APT_vs_PFOSTemp))
+
+table2_data <- do.call(rbind, lapply(comparisons, function(x) {
+  counts <- count_degs(x$res)
+  data.frame(combo = x$combo, reference = x$reference,
+             up = counts["up"], down = counts["down"], total = counts["total"],
+             stringsAsFactors = FALSE)
+}))
+
+cat("DEG counts (combination vs reference stressor) for Table 2:\n")
+print(table2_data)
+```
+
+# Gene Set Enrichment Analysis
+
+```{r GSEA_KEGG}
+library(clusterProfiler)
+library(org.Dr.eg.db)
+
+# Function to convert gene IDs to ENTREZ and run gseKEGG
+run_kegg_gsea <- function(res, condition_name) {
+  set.seed(42)
+  
+  df <- as.data.frame(res)
+  df$gene_id <- rownames(df)
+  df <- df[!is.na(df$log2FoldChange), ]
+  
+  # Convert Ensembl to ENTREZ
+  entrez_map <- mapIds(
+    org.Dr.eg.db,
+    keys = df$gene_id,
+    column = "ENTREZID",
+    keytype = "ENSEMBL",
+    multiVals = "first")
+  
+  df$entrez <- entrez_map
+  df <- df[!is.na(df$entrez), ]
+  df <- df[!duplicated(df$entrez), ]
+  
+  # Build ranked vector
+  ranked <- df$log2FoldChange
+  names(ranked) <- df$entrez
+  ranked <- sort(ranked, decreasing = TRUE)
+  
+  # Run gseKEGG
+  res_kegg <- tryCatch(
+    gseKEGG(
+      geneList = ranked,
+      organism = "dre",   # zebrafish
+      pvalueCutoff = 1,
+      verbose = FALSE),
+    error = function(e) NULL)
+
+  # Filter to pathways with q-value < 0.25 (Subramanian threshold)
+  if (!is.null(res_kegg) && nrow(res_kegg) > 0) {
+    res_kegg@result <- res_kegg@result[res_kegg@result$qvalue < 0.25, ]
+  }
+  
+  return(res_kegg)
+}  
+
+# Run on all 7 conditions
+kegg_list <- list(
+  Acid     = run_kegg_gsea(resLFC_Acid,     "Acid"),
+  Temp     = run_kegg_gsea(resLFC_Temp,     "Temp"),
+  PFOS     = run_kegg_gsea(resLFC_PFOS,     "PFOS"),
+  AcidTemp = run_kegg_gsea(resLFC_AcidTemp, "AcidTemp"),
+  AcidPFOS = run_kegg_gsea(resLFC_AcidPFOS, "AcidPFOS"),
+  PFOSTemp = run_kegg_gsea(resLFC_PFOSTemp, "PFOSTemp"),
+  APT      = run_kegg_gsea(resLFC_APT,      "APT"))
+
+# Summary
+cat("KEGG pathways significant per condition:\n")
+print(sapply(kegg_list, function(x) {
+  if (is.null(x)) return(0) 
+  nrow(x)
+}))
+
+saveRDS(kegg_list, "kegg_list_LOCKED.rds")
+cat("\nResults saved to kegg_list_LOCKED.rds\n")
+```
+
+```{r KEGG_combined_table}
+# Pool KEGG results from all 7 conditions into one table
+kegg_combined <- do.call(rbind, lapply(names(kegg_list), function(nm) {
+  g <- kegg_list[[nm]]
+  if (is.null(g) || nrow(g) == 0) return(NULL)
+  df <- as.data.frame(g)
+  df$condition <- nm
+  df[, c("ID", "Description", "NES", "p.adjust", 
+         "setSize", "condition")]
+}))
+
+# Set condition order
+kegg_combined$condition <- factor(
+  kegg_combined$condition,
+  levels = c("Acid", "Temp", "PFOS", 
+             "AcidTemp", "AcidPFOS", "PFOSTemp", "APT"))
+
+cat("Total KEGG entries (pathway × condition):", nrow(kegg_combined), "\n")
+cat("Unique KEGG pathways:", length(unique(kegg_combined$ID)), "\n")
+print(head(kegg_combined))
+```
+
+```{r KEGG_BRITE_subcategories}
+library(KEGGREST)
+
+# Fetch official KEGG pathway hierarchy
+brite <- keggGet("br:br08901")[[1]]
+
+# Parse the hierarchy: A = top category, B = subcategory, C = pathway
+# Lines look like:
+# A<b>Metabolism</b>
+# B  <b>Global and overview maps</b>
+# C    01100  Metabolic pathways
+lines <- strsplit(brite, "\n")[[1]]
+
+# Build pathway → category mapping from the parsed hierarchy
+build_kegg_map <- function(lines) {
+  current_A <- ""
+  current_B <- ""
+  pathway_map <- list()
+  
+  for (line in lines) {
+    if (startsWith(line, "A")) {
+      current_A <- gsub("^A|<[^>]+>", "", line) |> trimws()
+    } else if (startsWith(line, "B")) {
+      current_B <- gsub("^B\\s*|<[^>]+>", "", line) |> trimws()
+    } else if (startsWith(line, "C")) {
+      # Extract pathway ID and name
+      m <- regmatches(line, regexec("^C\\s+(\\d{5})\\s+(.+)$", line))[[1]]
+      if (length(m) >= 3) {
+        pathway_id <- m[2]
+        pathway_map[[pathway_id]] <- list(
+          A = current_A,
+          B = current_B,
+          name = m[3])
+      }
+    }
+  }
+  pathway_map
+}
+
+kegg_hierarchy <- build_kegg_map(lines)
+cat("Total KEGG pathways in BRITE hierarchy:", length(kegg_hierarchy), "\n")
+
+# Build a tidy lookup data frame
+kegg_lookup <- do.call(rbind, lapply(names(kegg_hierarchy), function(id) {
+  data.frame(
+    pathway_id = id,
+    category_A = kegg_hierarchy[[id]]$A,
+    category_B = kegg_hierarchy[[id]]$B,
+    pathway_name = kegg_hierarchy[[id]]$name,
+    stringsAsFactors = FALSE)
+}))
+
+# Now apply to your kegg_combined table
+# Strip "dre" prefix to match
+kegg_combined$pathway_id <- gsub("dre", "", kegg_combined$ID)
+kegg_combined$category_A <- kegg_lookup$category_A[
+  match(kegg_combined$pathway_id, kegg_lookup$pathway_id)]
+kegg_combined$category_B <- kegg_lookup$category_B[
+  match(kegg_combined$pathway_id, kegg_lookup$pathway_id)]
+
+cat("\nPathways per top-level category (A):\n")
+print(table(kegg_combined$category_A[!duplicated(kegg_combined$ID)]))
+
+cat("\nPathways per subcategory (B):\n")
+print(table(kegg_combined$category_B[!duplicated(kegg_combined$ID)]))
+
+cat("\nUnmapped pathways (should be empty):\n")
+unique(kegg_combined[is.na(kegg_combined$category_A), c("ID", "Description")])
+head(kegg_combined[, c("Description", "category_A", "category_B", "NES", "condition")])
+table(kegg_combined$category_B[!duplicated(kegg_combined$ID)])
+```
+
+```{r KEGG_UpsetPlot}
+# Build KEGG pathway lists per condition
+kegg_pathway_lists <- lapply(kegg_list, function(g) {
+  if (is.null(g) || nrow(g) == 0) return(character(0))
+  as.data.frame(g)$Description
+})
+
+library(ComplexUpset)
+
+# Build UpSet matrix
+all_kegg_pathways <- unique(unlist(kegg_pathway_lists))
+kegg_upset_df <- data.frame(pathway = all_kegg_pathways, 
+                            stringsAsFactors = FALSE)
+for (cond in names(kegg_pathway_lists)) {
+  kegg_upset_df[[cond]] <- kegg_upset_df$pathway %in% kegg_pathway_lists[[cond]]
+}
+
+conditions_with_data <- names(kegg_pathway_lists)[
+  sapply(kegg_pathway_lists, length) > 0]
+
+p_panelC <- ComplexUpset::upset(
+  kegg_upset_df,
+  intersect = conditions_with_data,
+  min_size = 1,
+  width_ratio = 0.2,
+  sort_sets = FALSE,
+  sort_intersections_by = "cardinality",
+  base_annotations = list(
+    'Intersection size' = intersection_size(
+  mapping = aes(fill = 'bars'),
+  text = list(size = 4)) +
+  scale_fill_manual(values = c('bars' = '#2C3E8F'), guide = 'none') +
+  theme(axis.title = element_text(size = 12),
+        axis.text  = element_text(size = 10))),
+  themes = upset_modify_themes(
+    list(
+      'intersections_matrix' = theme(
+        axis.text.y = element_text(size = 12)))))
+
+p_panelC
+```
+
+```{r KEGG_Bubble_plot}
+# Filter out "Global and overview maps" (umbrella pathways with too much overlap)
+kegg_for_plot <- kegg_combined %>%
+  filter(category_B != "Global and overview maps")
+
+cat("Pathways for Panel B:", length(unique(kegg_for_plot$ID)), "\n")
+cat("Categories:", length(unique(kegg_for_plot$category_B)), "\n")
+
+top_pathways <- kegg_for_plot %>%
+  group_by(Description) %>%
+  summarise(max_abs_NES = max(abs(NES)), .groups = "drop") %>%
+  arrange(desc(max_abs_NES)) %>%
+  slice_head(n = 30) %>%
+  pull(Description)
+
+kegg_for_plot <- kegg_for_plot %>%
+  filter(Description %in% top_pathways)
+
+cat("After filtering: ", length(unique(kegg_for_plot$ID)), " pathways across ",
+    length(unique(kegg_for_plot$category_B)), " categories\n", sep = "")
+
+# Order categories: Metabolism first, then Genetic Info, then Cellular, etc.
+category_order <- kegg_for_plot %>%
+  dplyr::select(category_A, category_B) %>%
+  distinct() %>%
+  arrange(category_A, category_B) %>%
+  pull(category_B)
+
+kegg_for_plot$category_B <- factor(kegg_for_plot$category_B, 
+                                     levels = category_order)
+
+# Wrap category names to fit vertical strips (max ~14 chars per line)
+kegg_for_plot$category_B_wrap <- stringr::str_wrap(
+  as.character(kegg_for_plot$category_B), width = 14)
+
+kegg_for_plot$category_B_wrap <- factor(
+  kegg_for_plot$category_B_wrap,
+  levels = stringr::str_wrap(category_order, width = 14))
+
+# Order pathways within each category by mean NES
+pathway_order <- kegg_for_plot %>%
+  group_by(category_B, Description) %>%
+  summarise(mean_NES = mean(NES), .groups = "drop") %>%
+  arrange(category_B, desc(mean_NES)) %>%
+  pull(Description)
+
+kegg_for_plot$Description <- factor(kegg_for_plot$Description, 
+                                      levels = unique(pathway_order))
+
+# Wrap long pathway names
+kegg_for_plot$Description_wrap <- stringr::str_wrap(
+  as.character(kegg_for_plot$Description), width = 40)
+kegg_for_plot$Description_wrap <- factor(
+  kegg_for_plot$Description_wrap,
+  levels = stringr::str_wrap(unique(pathway_order), width = 40))
+
+# Build the plot
+p_panelB <- ggplot(kegg_for_plot,
+                    aes(x = condition, y = Description_wrap,
+                        size = setSize, color = NES)) +
+  geom_point() +
+  facet_grid(category_B_wrap ~ ., scales = "free_y", space = "free_y") +
+  scale_color_gradient2(
+    low = "#378ADD", mid = "white", high = "#D85A30",
+    midpoint = 0,
+    name = "NES",
+    limits = c(-3, 3),
+    oob = scales::squish) +
+  scale_size_continuous(name = "gene set size", range = c(2, 7)) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    strip.text.y = element_text(angle = 0, face = "bold", size = 11,
+                              lineheight = 0.85),
+    strip.placement = "outside",
+    strip.background = element_rect(fill = "grey90", color = NA),
+    panel.spacing.y = unit(0.4, "lines"),
+    panel.border = element_rect(color = "grey60", fill = NA, linewidth = 0.3),
+    legend.position = "right")
+
+p_panelB
+
+ggsave("Figure4_PanelB_KEGG.pdf", p_panelB,
+       width = 12, height = 14, units = "in", dpi = 300)
+
+ggsave("Figure4_PanelB_KEGG.png", p_panelB,
+       width = 12, height = 14, units = "in", dpi = 600)
+```
+
+```{r Figure3}
+left_column <- plot_grid(
+  combined_volcano, p_panelC,
+  ncol = 1,
+  rel_heights = c(1, 1),
+  labels = c("A", "B"),
+  label_size = 14)
+
+final_figure <- plot_grid(
+  left_column, p_panelB,
+  ncol = 2,
+  rel_widths = c(1, 1.3),
+  labels = c("", "C"),
+  label_size = 14)
+
+ggsave("Figure4_transcriptomics.png",
+       final_figure,
+       width = 14, height = 15, units = "in", dpi = 600)
+
+ggsave("Figure4_transcriptomics.pdf",
+       final_figure,
+       width = 14, height = 12, units = "in", dpi = 300)
+```
+
+# Supplementary analysis — Gene Ontology biological process enrichment
+
+GO biological process enrichment was performed in parallel with KEGG analysis 
+to provide complementary functional insight. Results are presented as 
+supplementary material since KEGG analysis was used as the primary functional 
+annotation framework for cross-omics integration with the metabolomic and 
+lipidomic data.
+
+```{r gsea_setup, message = FALSE, warning = FALSE}
+OrgDb   <- org.Dr.eg.db 
+keytype <- "ENSEMBL"    
+```
+
+```{r gsea_function}
+run_GSEA <- function(res_df, condition_name,
+                     OrgDb   = org.Dr.eg.db,
+                     ont     = "BP",
+                     minSize = 15,
+                     maxSize = 500) {
+  
+  # Remove genes with NA fold change, p-values or gene ID
+  res_clean <- res_df[!is.na(res_df$log2FoldChange) &
+                      !is.na(res_df$pvalue) &
+                      !is.na(res_df$gene_id), ]
+  
+  # Build ranked list using sign(LFC) * -log10(pvalue)
+  res_clean$rank <- sign(res_clean$log2FoldChange) *
+                    -log10(res_clean$pvalue)
+  
+  gene_list <- res_clean$rank
+  names(gene_list) <- res_clean$gene_id
+  gene_list <- sort(gene_list, decreasing = TRUE)
+  
+  # Remove duplicates (keep highest rank)
+  gene_list <- gene_list[!duplicated(names(gene_list))]
+  
+  # Run GSEA on GO (Biological Process) terms
+  gsea_res <- gseGO(
+    geneList     = gene_list,
+    OrgDb        = OrgDb,
+    keyType      = keytype,
+    ont          = ont,
+    minGSSize    = minSize,
+    maxGSSize    = maxSize,
+    pvalueCutoff = 0.05,
+    pAdjustMethod = "BH",
+    verbose      = FALSE,
+    seed         = 42   # for reproducibility
+  )
+  
+  # Simplify to remove redundant GO terms
+  gsea_simplified <- simplify(gsea_res,
+                               cutoff    = 0.7,
+                               by        = "p.adjust",
+                               select_fun = min)
+  
+  cat("\n===", condition_name, "===\n")
+  cat("Significant pathways (raw):", nrow(gsea_res), "\n")
+  cat("After simplification:", nrow(gsea_simplified), "\n")
+  
+  return(gsea_simplified)
+}
+```
+
+```{r run_gsea, message=FALSE, warning=FALSE}
+# Run GSEA for all conditions vs Ctrl
+gsea_Acid     <- run_GSEA(results_Acid,     "Acid")
+gsea_Temp     <- run_GSEA(results_Temp,     "Temp")
+gsea_PFOS     <- run_GSEA(results_PFOS,     "PFOS")
+gsea_AcidTemp <- run_GSEA(results_AcidTemp, "AcidTemp")
+gsea_PFOSTemp <- run_GSEA(results_PFOSTemp, "PFOSTemp")
+gsea_AcidPFOS <- run_GSEA(results_AcidPFOS, "AcidPFOS")
+gsea_APT      <- run_GSEA(results_APT,      "APT")
+```
+The number of significant pathways varied substantially across conditions, with AcidPFOS showing the broadest pathway-level response (123 pathways) despite relatively few DEGs (74), illustrating that GSEA and DEG analysis are complementary and GSEA detects coordinated shifts across gene sets that may not reach significance at the individual gene level. Acid and Temp showed 41 and 34 significant pathways respectively despite almost no individual DEGs. 
+
+```{r gsea_bubble_plots}
+
+# Create the bubble plot function with x axis = NES (normalized enrichment score) and y axis = pathway name. Size = number of genes in pathway that contributed and color =  adjusted p-value. 
+make_bubble <- function(gsea_obj, title, n_top = 20) {
+  
+  if (is.null(gsea_obj) || nrow(gsea_obj) == 0) {
+    message("No significant pathways for: ", title)
+    return(NULL)
+  }
+  
+  df <- as.data.frame(gsea_obj)
+  
+  # Select top n by p.adjust, split up/down evenly if possible
+  df_up   <- df[df$NES > 0, ]
+  df_down <- df[df$NES < 0, ]
+  
+  n_up   <- min(nrow(df_up),   ceiling(n_top / 2))
+  n_down <- min(nrow(df_down), ceiling(n_top / 2))
+  
+  df_up   <- head(df_up[order(df_up$p.adjust), ],   n_up)
+  df_down <- head(df_down[order(df_down$p.adjust), ], n_down)
+  df_plot <- rbind(df_up, df_down)
+  
+  # Wrap long pathway names
+  df_plot$Description <- stringr::str_wrap(df_plot$Description, 
+                                            width = 50)
+  
+  # Order by NES for readability
+  df_plot$Description <- factor(df_plot$Description,
+                                 levels = df_plot$Description[
+                                   order(df_plot$NES)])
+  
+  ggplot(df_plot, aes(x     = NES,
+                       y     = Description,
+                       size  = setSize,
+                       color = p.adjust)) +
+    geom_point() +
+    scale_color_gradient(low  = "#D85A30",
+                          high = "#BBBBBB",
+                          name = "adj. p-value") +
+    scale_size_continuous(name = "gene set size",
+                           range = c(3, 10)) +
+    geom_vline(xintercept = 0, linetype = "dashed",
+               color = "grey40", linewidth = 0.4) +
+    labs(title = title,
+         x     = "Normalized enrichment score (NES)",
+         y     = NULL) +
+    theme_minimal(base_size = 10) +
+    theme(plot.title    = element_text(size = 11, face = "bold"),
+          axis.text.y   = element_text(size = 8),
+          legend.position = "right")
+}
+
+# Generate bubble plots
+p_bubble_Acid     <- make_bubble(gsea_Acid,     "Acid vs Ctrl")
+p_bubble_Temp     <- make_bubble(gsea_Temp,     "Temp vs Ctrl")
+p_bubble_PFOS     <- make_bubble(gsea_PFOS,     "PFOS vs Ctrl")
+p_bubble_AcidTemp <- make_bubble(gsea_AcidTemp, "AcidTemp vs Ctrl")
+p_bubble_PFOSTemp <- make_bubble(gsea_PFOSTemp, "PFOSTemp vs Ctrl")
+p_bubble_AcidPFOS <- make_bubble(gsea_AcidPFOS, "AcidPFOS vs Ctrl")
+p_bubble_APT      <- make_bubble(gsea_APT,      "APT vs Ctrl")
+
+# Print each plot individually
+p_bubble_Acid
+p_bubble_Temp
+p_bubble_PFOS
+p_bubble_AcidTemp
+p_bubble_PFOSTemp
+p_bubble_AcidPFOS
+p_bubble_APT
+```
+
+The GSEA bubble plots reveal both shared pathway and condition-specific signatures across the seven exposure conditions. Several biological themes emerge consistently.
+Muscle structure, myofibril assembly, and actin cytoskeleton organisation pathways are activated across Acid, Temp, PFOS and to a lesser extent other conditions. In zebrafish liver, activation of these terms likely reflects cytoskeletal remodelling in hepatocytes rather than cardiac tissue changes. 
+Acid and PFOS both suppress lipid-related pathways: glycerolipid metabolism and lipid transport in Acid, and amino acid catabolism in PFOS. The suppression of autophagy under Acid exposure may indicate impaired cellular quality control under acidification. 
+
+Temperature exposure suppresses mitochondrial respiratory chain assembly and circadian regulation of gene expression, suggesting that thermal stress disrupts both energy production and temporal organisation of hepatic metabolism. 
+
+AcidTemp activates xenobiotic stimulus response = chemical stress detection pathway. Also activates glycogen and energy reserve metabolism, while strongly suppressing cell cycle progression, DNA damage response, and mitochondrial organisation. This broad suppression of proliferative and repair processes suggests that combined acid and temperature stress induces a state of metabolic arrest in the liver.
+
+PFOSTemp shows a completely distinct pathway profile from all other conditions. The dominant signal is activation of proteostasis machinery (protein folding, ER-Golgi transport, ribosome biogenesis, tRNA metabolism, and mRNA splicing), representing a coordinated upregulation of the entire protein synthesis. This response is unique to PFOSTemp and is not observed in either PFOS or Temp alone, confirming the synergistic nature of this combination at the pathway level. Reproductive processes and meiotic cell cycle are suppressed, potentially reflecting diversion of cellular resources toward the stress response.
+
+AcidPFOS activates xenobiotic and immune response pathways similarly to AcidTemp, and strongly suppresses cell cycle, DNA repair, and chromosome segregation with very low adjusted p-values. ¨
+
+APT activates xenobiotic metabolism, glycosylation, and carbohydrate metabolism, while suppressing ribosome biogenesis, rRNA processing, and circadian rhythm regulation. The suppression of ribosome biogenesis in APT is in direct contrast to its activation in PFOSTemp --> adding acid to the PFOS-temperature combination abolishes the proteostatic adaptive response. The suppression of circadian rhythm regulation in APT is consistent with the circadian clock genes identified as significant DEGs in this condition, suggesting that triple stressor exposure specifically disrupts hepatic temporal organisation.
+
+```{r gsea_summary_table}
+# Summary table of GSEA results across all conditions
+gsea_list <- list(
+  Acid     = gsea_Acid,
+  Temp     = gsea_Temp,
+  PFOS     = gsea_PFOS,
+  AcidTemp = gsea_AcidTemp,
+  PFOSTemp = gsea_PFOSTemp,
+  AcidPFOS = gsea_AcidPFOS,
+  APT      = gsea_APT
+)
+
+gsea_summary <- sapply(gsea_list, function(g) {
+  if (is.null(g) || nrow(g) == 0) return(c(Activated=0, Suppressed=0, Total=0))
+  df <- as.data.frame(g)
+  c(Activated  = sum(df$NES > 0),
+    Suppressed = sum(df$NES < 0),
+    Total      = nrow(df))
+})
+
+cat("GSEA pathway summary (after simplification, padj < 0.05):\n")
+print(t(gsea_summary))
+```
+# Shared pathways analysis 
+
+To visualise pathway enrichment across all conditions simultaneously, GSEA results from the seven exposure conditions were pooled into a single long-format table. GO identifiers were retained alongside pathway descriptions to enable semantic similarity analysis in the next step.
+
+```{r combined_plot}
+
+# Pool GSEA results from all 7 conditions into one table.
+# Each row = one pathway in one condition.
+# The ID column (GO:xxxxxx) is needed for rrvgo clustering later.
+gsea_combined <- do.call(rbind, lapply(names(gsea_list), function(nm) {
+  g <- gsea_list[[nm]]
+  if (is.null(g) || nrow(g) == 0) return(NULL)
+  df <- as.data.frame(g)
+  df$condition <- nm
+  df[, c("ID", "Description", "NES", "p.adjust", 
+         "setSize", "condition")]
+}))
+
+# Set a logical order for conditions (single → double → triple stressors)
+gsea_combined$condition <- factor(
+  gsea_combined$condition,
+  levels = c("Acid", "Temp", "PFOS", 
+             "AcidTemp", "AcidPFOS", "PFOSTemp", 
+             "APT"))
+
+# Quick check
+cat("Total GSEA entries (pathway × condition):", nrow(gsea_combined), "\n")
+cat("Unique pathways:", length(unique(gsea_combined$ID)), "\n")
+head(gsea_combined)
+```
+To group related GO terms by biological theme, the rrvgo package was used to compute semantic similarity between all GO biological process terms identified in any condition, and to cluster them into parent terms based on ontology distance (threshold = 0.7). The resulting rrvgo parent terms were then manually merged into broader biological themes to facilitate visualisation and interpretation.
+
+```{r rrvgo clustering}
+# Unique GO IDs across all conditions (rrvgo works on a unique set)
+unique_ids <- unique(gsea_combined$ID)
+
+# Build similarity matrix: pairwise semantic similarity between GO terms using the zebrafish ontology
+simMatrix <- calculateSimMatrix(
+  unique_ids,
+  orgdb = "org.Dr.eg.db",
+  ont   = "BP",
+  method = "Rel")
+
+# Score each GO term by its lowest p.adjust across all conditions so that the most significant term per cluster becomes the representative one
+term_scores <- gsea_combined %>%
+  group_by(ID) %>%
+  summarise(best_padj = min(p.adjust), .groups = "drop")
+
+scores <- setNames(-log10(term_scores$best_padj), term_scores$ID)
+
+# Reduce to cluster representatives (parent terms) at similarity threshold 0.7
+reducedTerms <- reduceSimMatrix(
+  simMatrix,
+  scores,
+  threshold = 0.7,
+  orgdb = "org.Dr.eg.db")
+
+reducedTerms <- as.data.frame(reducedTerms)
+
+cat("Number of rrvgo clusters:", length(unique(reducedTerms$parentTerm)), "\n")
+print(dplyr::count(reducedTerms, parentTerm, sort = TRUE))
+
+openxlsx::write.xlsx(
+  dplyr::count(reducedTerms, parentTerm, sort = TRUE),
+  file = "rrvgo_parent_terms.xlsx"
+)
+```
+
+```{r select_representative_terms}
+# Step 1: Map every GSEA result to its rrvgo parent cluster
+
+all_with_parent <- gsea_combined %>%
+  left_join(reducedTerms[, c("go", "parentTerm")], 
+            by = c("ID" = "go")) %>%
+  filter(!is.na(parentTerm))
+
+# Step 2: For each (condition × parent), keep only the most significant child term. This is the cluster-level signal.
+cluster_per_condition <- all_with_parent %>%
+  group_by(condition, parentTerm) %>%
+  slice_min(p.adjust, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Step 3: select the 4 parent clusters with strongest signal(lowest p.adjust), regardless of direction (up or down)
+top_parents <- cluster_per_condition %>%
+  group_by(condition) %>%
+  slice_min(p.adjust, n = 4) %>%   # top 4 strongest per condition
+  ungroup() %>%
+  pull(parentTerm) %>%
+  unique()
+
+cat("Number of parent clusters selected for Panel B:", 
+    length(top_parents), "\n")
+
+print(sort(top_parents))
+
+panelB_data <- cluster_per_condition %>%
+  filter(parentTerm %in% top_parents)
+
+#rename too long names
+panelB_data$parentTerm[panelB_data$parentTerm == 
+  "endoplasmic reticulum to Golgi vesicle-mediated transport"] <- 
+  "ER to Golgi vesicle transport"
+
+# Order parents by mean NES (suppressed bottom, activated top)
+parent_order <- panelB_data %>%
+  group_by(parentTerm) %>%
+  summarise(mean_NES = mean(NES), .groups = "drop") %>%
+  arrange(mean_NES) %>%
+  pull(parentTerm)
+
+panelB_data$parentTerm <- factor(panelB_data$parentTerm, 
+                                  levels = parent_order)
+
+# Wrap long names
+panelB_data$parent_wrap <- stringr::str_wrap(
+  as.character(panelB_data$parentTerm), width = 35)
+panelB_data$parent_wrap <- factor(
+  panelB_data$parent_wrap,
+  levels = stringr::str_wrap(parent_order, width = 35))
+
+p_panelB <- ggplot(panelB_data,
+                    aes(x = condition,
+                        y = parent_wrap,
+                        size = setSize,
+                        color = NES)) +
+  geom_point() +
+  scale_color_gradient2(
+    low = "#378ADD", mid = "white", high = "#D85A30",
+    midpoint = 0,
+    name = "NES",
+    limits = c(-3, 3),
+    oob = scales::squish) +
+  scale_size_continuous(
+    name = "gene set size",
+    range = c(2, 7)) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 9, lineheight = 0.9),
+    panel.grid.major = element_line(color = "grey95"),
+    legend.position = "right")
+
+p_panelB
+```
+
+The final pathway selection was visualised as a bubble plot with conditions on the x-axis and representative pathways on the y-axis. Bubble colour encodes the normalised enrichment score (NES; red = activated, blue = suppressed), and bubble size encodes the number of core enrichment genes. Empty cells indicate that the pathway was not significant in that condition.
+
+## Sup. fig Volcano single stressors
+```{r volcanoes_single}
+# Single-stressor volcanoes for supplementary figure
+p_volc_Acid_supp <- p_volc_Acid + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+p_volc_Temp_supp <- p_volc_Temp + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+p_volc_PFOS_supp <- p_volc_PFOS + coord_cartesian(xlim = c(-25, 25), ylim = c(0, 20))
+
+supp_single_volcanoes <- (p_volc_Acid_supp + p_volc_Temp_supp + p_volc_PFOS_supp) +
+  plot_layout(ncol = 3, guides = "collect") &
+  theme(legend.position = "bottom")
+
+supp_single_volcanoes
+
+ggsave("Supp_Figure_single_stressor_volcanoes.pdf",
+       supp_single_volcanoes,
+       width = 12, height = 4.5, units = "in", dpi = 300)
+```
+
+# Exposure replicate assessment for PFOSTemp
+
+All three PFOSTemp female samples derive from exposure replicate 3. Since the two independent biological replicate experiments (exposures 2 and 3) differ by approximately one month in fish age at sampling, and exposure replicate was included as a covariate in the DESeq2 model, we assessed whether the strong PFOSTemp transcriptional signal might partly reflect experiment-specific variation rather than a genuine treatment effect.
+Note: this is not a sequencing batch effect in the technical sense and the two exposure replicates represent independent biological experiments with different fish, different tanks, and different breeding groups. However because all PFOSTemp samples come from one replicate, we cannot fully separate treatment effects from experiment-specific effects for this condition.
+To assess the biological origin of the PFOSTemp signal, we examined directional consistency of PFOSTemp DEGs with PFOS alone = a condition distributed across both exposure replicates (1 sample in replicate 2, 2 samples in replicate 3). If the PFOSTemp signal were driven by experiment-specific variation rather than biology, genes shared between PFOSTemp and PFOS would show random directional agreement. Consistent direction across both conditions would instead support a biological origin. We did the same analysis with Temp (2 samples in replicate 2, 2 samples in replicate 3). 
+
+```{r pfos_temp_batch_check}
+# Directional consistency of shared DEGs between PFOSTemp and PFOS
+
+pfos_temp_genes <- results_PFOSTemp[
+  results_PFOSTemp$direction %in% c("UP","DOWN"), "gene_id"]
+
+pfos_genes <- results_PFOS[
+  results_PFOS$direction %in% c("UP","DOWN"), "gene_id"]
+
+shared <- pfos_temp_genes[pfos_temp_genes %in% pfos_genes]
+cat("Genes significant in both PFOSTemp and PFOS:", 
+    length(shared), "\n")
+
+# Compare direction for shared genes
+pfos_temp_dir <- results_PFOSTemp[
+  results_PFOSTemp$gene_id %in% shared,
+  c("gene_id", "direction")]
+
+pfos_dir <- results_PFOS[
+  results_PFOS$gene_id %in% shared,
+  c("gene_id", "direction")]
+
+dir_compare <- merge(pfos_temp_dir, pfos_dir,
+                     by     = "gene_id",
+                     suffixes = c("_PFOSTemp", "_PFOS"))
+
+cat("Same direction:     ",
+    sum(dir_compare$direction_PFOSTemp ==
+        dir_compare$direction_PFOS),
+    "/", nrow(dir_compare), "\n")
+
+cat("Opposite direction: ",
+    sum(dir_compare$direction_PFOSTemp !=
+        dir_compare$direction_PFOS), "\n")
+
+# Same test for Temp 
+temp_genes <- results_Temp[
+  results_Temp$direction %in% c("UP","DOWN"), "gene_id"]
+
+shared_temp <- pfos_temp_genes[pfos_temp_genes %in% temp_genes]
+cat("\nGenes significant in both PFOSTemp and Temp:", 
+    length(shared_temp), "\n")
+
+pfos_temp_dir2 <- results_PFOSTemp[
+  results_PFOSTemp$gene_id %in% shared_temp,
+  c("gene_id", "direction")]
+
+temp_dir <- results_Temp[
+  results_Temp$gene_id %in% shared_temp,
+  c("gene_id", "direction")]
+
+dir_compare_temp <- merge(pfos_temp_dir2, temp_dir,
+                          by       = "gene_id",
+                          suffixes = c("_PFOSTemp", "_Temp"))
+
+cat("Same direction:     ",
+    sum(dir_compare_temp$direction_PFOSTemp ==
+        dir_compare_temp$direction_Temp),
+    "/", nrow(dir_compare_temp), "\n")
+
+cat("Opposite direction: ",
+    sum(dir_compare_temp$direction_PFOSTemp !=
+        dir_compare_temp$direction_Temp), "\n")
+```
+Of the 33 genes significant in both PFOSTemp and PFOS, all 33 showed concordant direction of regulation (100% directional agreement). Under a random model, the probability of obtaining 33/33 concordant directions by chance is 0.5^33 = very low. This strongly supports a biological rather than experiment-specific origin for the shared component of the PFOSTemp signal. 
+
+The same test was performed for Temp but only 1 gene was shared between PFOSTemp and Temp DEG lists, which is insufficient to draw any conclusion about directional consistency. This reflects the very low number of DEGs detected in the Temp condition due to high within-group variance, rather than an absence of shared biology between Temp and PFOSTemp.
+
+The large number of PFOSTemp-specific DEGs (2189 out of 2222) that are not shared with PFOS or Temp likely represent the genuine synergistic transcriptional response to combined PFOS and temperature stress.Results for PFOSTemp should nonetheless be interpreted with the caveat that all samples derive from a single exposure replicate, and experiment-specific effects cannot be fully excluded.
+
+# Sensitivity analysis
+
+```{r sensitivity}
+# Sensitivity analysis: all conditions vs Control
+conditions <- c("Acid", "Temp", "PFOS", 
+                "AcidTemp", "PFOSTemp", 
+                "AcidPFOS", "APT")
+
+# Extract results for all conditions
+sens_results <- list()
+for(cond in conditions) {
+  
+  # Skip if condition has no samples in sensitivity dataset
+  if(!cond %in% levels(meta_f_sensitivity$condition)) {
+    cat(cond, ": no samples in sensitivity dataset\n")
+    next
+  }
+  
+  res <- tryCatch({
+    resLFC <- lfcShrink(dds_sensitivity_f,
+                        contrast = c("condition", cond, "Ctrl"),
+                        type = "ashr")
+    get_sig_genes(resLFC, paste0(cond, "_sensitivity"))
+  }, error = function(e) {
+    cat(cond, ": error —", e$message, "\n")
+    return(NULL)
+  })
+  
+  sens_results[[cond]] <- res
+}
+
+# Compare main vs sensitivity DEG counts
+cat("\nDEG comparison — main vs sensitivity analysis:\n")
+cat(sprintf("%-12s %8s %8s %8s\n", 
+            "Condition", "Main", "Sensitivity", "Difference"))
+cat(rep("-", 42), "\n", sep="")
+
+for(cond in conditions) {
+  main_n <- sum(get(paste0("results_", cond))$direction %in% 
+                  c("UP","DOWN"))
+  
+  sens_n <- if(!is.null(sens_results[[cond]])) {
+    sum(sens_results[[cond]]$direction %in% c("UP","DOWN"))
+  } else NA
+  
+  diff <- if(!is.na(sens_n)) sens_n - main_n else NA
+  
+  cat(sprintf("%-12s %8d %8s %8s\n",
+              cond, main_n,
+              ifelse(is.na(sens_n), "NA", as.character(sens_n)),
+              ifelse(is.na(diff), "NA", as.character(diff))))
+}
+```
+The sensitivity analysis (excluding Acid18F2 and AcidPFOS67F2) produced broadly consistent results across all conditions. DEG counts were comparable or slightly higher for most conditions: Acid (5 vs 4), Temp (4 vs 6), PFOS (62 vs 73), AcidTemp (125 vs 187), PFOSTemp (2220 vs 2421), and APT (96 vs 116). The PFOSTemp result was robust to sample exclusion, with DEG counts remaining of the same order of magnitude and direction. The AcidPFOS condition showed a notable reduction in DEGs (74 vs 24), consistent with the reduced statistical power resulting from n=2 replicates after exclusion of AcidPFOS67F2 and confirming the rationale for retaining this sample in the primary analysis. Results from the primary analysis are reported throughout the manuscript.
+
+```{r export_files}
+# Export all DEG results to Excel
+wb <- createWorkbook()
+
+# vs Control comparisons
+for(nm in c("Acid","Temp","PFOS","AcidTemp",
+            "PFOSTemp","AcidPFOS","APT")) {
+  res <- get(paste0("results_", nm))
+  sig <- res[res$direction %in% c("UP","DOWN"), ]
+  addWorksheet(wb, nm)
+  writeData(wb, nm, sig)
+}
+
+# Combination vs single stressor
+for(nm in c("AcidTemp_vs_Acid","AcidTemp_vs_Temp",
+            "PFOSTemp_vs_PFOS","PFOSTemp_vs_Temp",
+            "AcidPFOS_vs_Acid","AcidPFOS_vs_PFOS",
+            "APT_vs_Acid","APT_vs_Temp","APT_vs_PFOS",
+            "APT_vs_AcidTemp","APT_vs_PFOSTemp",
+            "APT_vs_AcidPFOS")) {
+  res <- get(paste0("results_", nm))
+  sig <- res[res$direction %in% c("UP","DOWN"), ]
+  addWorksheet(wb, nm)
+  writeData(wb, nm, sig)
+}
+
+saveWorkbook(wb, "DEG_results_all_comparisons.xlsx",
+             overwrite = TRUE)
+
+# Export KEGG GSEA results (Supplementary Table)
+wb_kegg <- createWorkbook()
+for(nm in names(kegg_list)) {
+  g <- kegg_list[[nm]]
+  if(!is.null(g) && nrow(g) > 0) {
+    df <- as.data.frame(g)[, c("ID", "Description", "setSize",
+                               "enrichmentScore", "NES",
+                               "pvalue", "p.adjust", "qvalue",
+                               "core_enrichment")]
+    addWorksheet(wb_kegg, nm)
+    writeData(wb_kegg, nm, df)
+  }
+}
+saveWorkbook(wb_kegg, "KEGG_results_all_conditions.xlsx",
+             overwrite = TRUE)
+
+# Export GSEA results
+wb_gsea <- createWorkbook()
+for(nm in names(gsea_list)) {
+  g <- gsea_list[[nm]]
+  if(!is.null(g) && nrow(g) > 0) {
+    df <- as.data.frame(g)[, c("Description", "setSize",
+                                "enrichmentScore", "NES",
+                                "pvalue", "p.adjust",
+                                "core_enrichment")]
+    addWorksheet(wb_gsea, nm)
+    writeData(wb_gsea, nm, df)
+  }
+}
+saveWorkbook(wb_gsea, "GSEA_results_all_conditions.xlsx",
+             overwrite = TRUE)
+```
+
+```{r save_objects}
+# Saves all key objects for fast session restore
+save(counts, metadata,
+     dds_explore, 
+     metadata, counts,
+     dds_f, rld_f, pca_f,
+     meta_f_main, counts_f_main,
+     dds_main_f,
+     results_Acid, results_Temp, results_PFOS,
+     results_AcidTemp, results_PFOSTemp,
+     results_AcidPFOS, results_APT,
+     resLFC_Acid, resLFC_Temp, resLFC_PFOS,
+     resLFC_AcidTemp, resLFC_PFOSTemp,
+     resLFC_AcidPFOS, resLFC_APT,
+     gsea_Acid, gsea_Temp, gsea_PFOS,
+     gsea_AcidTemp, gsea_PFOSTemp,
+     gsea_AcidPFOS, gsea_APT,
+     gsea_list, 
+     file = "epiclim_analysis.RData")
+```
+
+```{r session_infos}
+# Session information for reproducibility
+# Records R version, package versions, and system information
+sessionInfo()
+```
+
