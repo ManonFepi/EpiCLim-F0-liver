@@ -1,0 +1,477 @@
+---
+title: "Epiclim Morphology analysis (Length, weight, K, HSI) - F0 adult females"
+author: "Manon"
+date: "2026-04-21"
+output: html_document
+---
+## Morphology analysis - Introduction
+This script was used to perform morphological analyses on adult female zebrafish 
+(15.5-16.5 months post-fertilization) following developmental exposure 
+(2 hpf to 28 dpf) to combined climate stressors (acidification at pH 6.35, 
+elevated temperature at 32°C) and PFOS (nominal 2 µg/L) in a 2×2×2 
+factorial design.
+Data include fish from two independent developmental exposures (exposure 2 
+and exposure 3). A preliminary exposure (exposure 1) was excluded due to 
+limited sample size.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Load required packages
+```{r load-libraries}
+library(MASS)      # for rlm
+library(readxl)    # open data
+library(dplyr)     # code in pipe
+library(ggplot2)   # for graph
+library(rstatix)   # stats
+library(gridExtra) # graph alignment
+library(ggpubr)    # stat link with ggplot
+library(multcomp)  # stat and letters
+library(emmeans)   # estimated marginal means
+library(sfsmisc)   # f.robftest for rlm
+library(patchwork)
+library(car)       # for Type 2 Anova
+```
+
+## Working environment setup
+```{r setwd}
+# Set your working directory to the location of this Rmd file
+# setwd("path/to/EpiCLim-F0-liver/morphology")
+```
+
+## Import dataset
+```{r data_import}
+Data <- read_excel(
+  normalizePath("Sampling F0-metadata_females.xlsx"),
+  sheet = "All", col_names = TRUE
+)
+summary(Data)
+```
+## Data treatment
+Remove "_" in some column values.
+```{r data_treatment}
+Data$Exposure <- gsub("_", "", Data$Exposure)
+
+# Sample sizes summary
+Data %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  print()
+```
+
+```{r data_setup}
+Data$Fish_nb <- as.factor(Data$Fish_nb)
+Data$Condition <- as.factor(Data$Condition)
+Data$Exposure <- as.factor(Data$Exposure)
+summary(Data)
+
+#Check missing values
+morph_vars <- c("Length_thins", "Length", "Weight_g", "BSI", "HSI", "GSI", "K")
+print(colSums(is.na(Data[, morph_vars])))
+
+#Color code for conditions (used across all plots)
+myColors <- c(
+  "Control" = "#4C78A8", "Acid" = "#59A14F", "Temp" = "#E45756",
+  "PFOS" = "#B279A2", "AcidTemp" = "#8C6D1F", "PFOSTemp" = "#AD1457",
+  "AcidPFOS" = "#5B6D5B", "AcidPFOSTemp" = "#7B3F5A")
+```
+
+## PCA
+```{r PCA}
+#Set reference levels (Control as reference for Condition, Expo 2 as reference)
+Data$Condition <- factor(Data$Condition,
+  levels = c("Control", "Acid", "Temp", "PFOS",
+             "AcidTemp", "AcidPFOS", "PFOSTemp", "AcidPFOSTemp"))
+Data$Exposure <- relevel(factor(Data$Exposure), ref = "2")
+
+#Check sample sizes per condition
+table(Data$Condition, Data$Exposure)
+
+#PCA on complete lines (no missing values) using raw measurements only
+#(indices like K, BSI are derived from these, including them would double-count variance)
+morph_metrics <- c("Length", "Weight_mg", "Weight_Liver_g")
+Data_pca <- Data[complete.cases(Data[, morph_metrics]), ]
+cat("Fish used:", nrow(Data_pca), "out of", nrow(Data), "\n")
+
+pca <- prcomp(Data_pca[, morph_metrics], scale. = TRUE)
+var_exp <- round(summary(pca)$importance[2, 1:2] * 100, 1)
+summary(pca)
+
+pca_df <- data.frame(
+  PC1 = pca$x[, 1], PC2 = pca$x[, 2],
+  Condition = Data_pca$Condition,
+  Exposure = Data_pca$Exposure)
+
+# By Exposure
+p1 <- ggplot(pca_df, aes(PC1, PC2, color = Exposure)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  stat_ellipse(level = 0.68) +
+  labs(x = paste0("PC1 (", var_exp[1], "%)"),
+       y = paste0("PC2 (", var_exp[2], "%)"),
+       title = "By Exposure") +
+  theme_classic()
+
+# By Condition
+p2 <- ggplot(pca_df, aes(PC1, PC2, color = Condition)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  stat_ellipse(level = 0.68) +
+  scale_color_manual(values = myColors) +
+  labs(x = paste0("PC1 (", var_exp[1], "%)"),
+       y = paste0("PC2 (", var_exp[2], "%)"),
+       title = "By Condition") +
+  theme_classic()
+
+grid.arrange(p1, p2)
+
+combined_PCA <- (p1/p2) +
+  plot_annotation(tag_levels = "A")
+
+combined_PCA
+
+ggsave("PCA_females.png", plot = combined_PCA,
+       width = 7, height = 5, units = "in", dpi = 600)
+```
+PCA shows no strict batch effect. Expo 2 and 3 overlap.
+
+## Log2 transform data
+```{r log2_transfo}
+Data$log2_Length_thins <- log2(Data$Length_thins)
+Data$log2_Length <- log2(Data$Length)
+Data$log2_Weight <- log2(Data$Weight_g)
+Data$log2_Weight_mg <- log2(Data$Weight_mg)
+Data$log2_BSI <- log2(Data$BSI)
+Data$log2_HSI <- log2(Data$HSI)
+Data$log2_GSI <- log2(Data$GSI)
+Data$log2_K <- log2(Data$K)
+
+#Check the distribution
+par(mfrow = c(3, 2))
+hist(Data$HSI, main = "HSI - raw", breaks = 20)
+hist(log2(Data$HSI), main = "HSI - log2", breaks = 20)
+hist(Data$BSI, main = "BSI - raw", breaks = 20)
+hist(log2(Data$BSI), main = "BSI - log2", breaks = 20)
+hist(Data$K, main = "K - raw", breaks = 20)
+hist(log2(Data$K), main = "K - log2", breaks = 20)
+
+par(mfrow = c(3, 2))
+hist(Data$Length_thins, main = "Length thins - raw", breaks = 20)
+hist(log2(Data$Length_thins), main = "Length thins - log2", breaks = 20)
+hist(Data$Length, main = "Length - raw", breaks = 20)
+hist(log2(Data$Length), main = "Length - log2", breaks = 20)
+hist(Data$Weight_g, main = "Weight - raw", breaks = 20)
+hist(log2(Data$Weight_g), main = "Weight - log2", breaks = 20)
+```
+## Length analysis
+```{r length}
+#Diagnostic on standard lm first
+model_length <- lm(log2_Length ~ Condition + Exposure, data = Data)
+par(mfrow = c(2, 2))
+plot(model_length, main = "Length")
+#residuals vs fitted = random scatter around zero --> good
+#QQ plot: some fish differ strongly from the line --> outliers --> switch to rlm
+
+#Robust regression
+model_length_robust <- rlm(log2_Length ~ Condition + Exposure, data = Data)
+
+#Omnibus F-test on Condition
+f.robftest(model_length_robust, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS",
+                                        "ConditionAcidTemp", "ConditionAcidPFOS",
+                                        "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_length_robust, var = "Exposure3")
+#Condition effect present. Exposure doesn't matter --> we can keep our 2 batches as technical replicates
+
+#Dunnett: each treatment vs Control
+emm <- emmeans(model_length_robust, ~ Condition)
+contrast(emm, method = "trt.vs.ctrl", ref = "Control")
+
+#All pairwise comparisons (BH-adjusted, 28 tests)
+pairs(emm, adjust = "BH")
+
+#Compact letter display for the plot
+cld_df <- as.data.frame(cld(emm, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+#Sample sizes
+n_df <- Data %>%
+  filter(!is.na(log2_Length)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0("n=", n))
+
+#Plot
+length_plot_females <- ggplot(Data, aes(x = Condition, y = log2_Length, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 1.55, label = .group),
+            size = 5, inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = 0.8, label = label),
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  labs(y = "Log2 Standard body length (cm)", x = "", title = "Length") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+length_plot_females
+
+ggsave("length_plot.png", plot = length_plot_females,
+       width = 7, height = 5, units = "in", dpi = 600)
+```
+## Weight analysis
+```{r weight}
+#Diagnostic on standard lm
+model_Weight <- lm(log2_Weight_mg ~ Condition + Exposure, data = Data)
+par(mfrow = c(2, 2))
+plot(model_Weight, main = "Weight")
+#residuals vs fitted = random scatter around zero --> good
+#QQ plot ok --> keep lm
+
+anova(model_Weight)
+#Exposure effect probably due to age (expo 2 fish are older --> bigger)
+#Condition effect also present
+
+#Dunnett: each treatment vs Control
+emm <- emmeans(model_Weight, ~ Condition)
+contrast(emm, method = "trt.vs.ctrl", ref = "Control")
+
+#All pairwise comparisons
+pairs(emm, adjust = "BH")
+
+#Compact letter display
+cld_df <- as.data.frame(cld(emm, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+#Sample sizes
+n_df <- Data %>%
+  filter(!is.na(log2_Weight_mg)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0("n=", n))
+
+#Plot
+weight_plot_females <- ggplot(Data, aes(x = Condition, y = log2_Weight_mg, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 9.5, label = .group),
+            size = 5, inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = 6.8, label = label),
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  labs(y = "Log2 Weight (mg)", x = "", title = "Weight") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+weight_plot_females
+
+ggsave("weight_plot.png", plot = weight_plot_females,
+       width = 7, height = 5, units = "in", dpi = 600)
+```
+## HSI analysis
+```{r HSI}
+#Diagnostic on standard lm
+model_HSI <- lm(log2_HSI ~ Condition + Exposure, data = Data)
+par(mfrow = c(2, 2))
+plot(model_HSI, main = "HSI")
+#residuals vs fitted = random scatter around zero --> good
+#QQ plot some outliers --> rlm
+
+cooksd <- cooks.distance(model_HSI)
+threshold <- 4 / (nrow(Data) - length(coef(model_HSI)))
+outliers <- which(cooksd > threshold)
+outliers
+
+#Robust regression
+model_HSI_robust <- rlm(log2_HSI ~ Condition + Exposure, data = Data)
+
+#Omnibus F-test
+f.robftest(model_HSI_robust, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS",
+                                     "ConditionAcidTemp", "ConditionAcidPFOS",
+                                     "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_HSI_robust, var = "Exposure3")
+#No effects whatsoever.
+
+#Sensitivity check: ANOVA without extreme outliers (exploratory)
+Data_no_out <- Data[!(rownames(Data) %in% outliers), ]
+model_HSI_aov <- aov(log2_HSI ~ Condition + Exposure, data = Data_no_out)
+summary(model_HSI_aov)
+#still no effects
+
+#Dunnett: each treatment vs Control
+emm <- emmeans(model_HSI_robust, ~ Condition)
+contrast(emm, method = "trt.vs.ctrl", ref = "Control")
+
+#All pairwise comparisons (BH-adjusted)
+pairs(emm, adjust = "BH")
+
+#Compact letter display
+cld_df <- as.data.frame(cld(emm, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+#Sample sizes
+n_df <- Data %>%
+  filter(!is.na(log2_HSI)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0("n=", n))
+
+#Plot
+plot_HSI_females <- ggplot(Data, aes(x = Condition, y = log2_HSI, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 3.85, label = .group),
+            size = 5, color = "black", inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = -2.7, label = label),
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  labs(y = "Log2 HSI", x = "", title = "HSI") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+plot_HSI_females
+
+ggsave("HSI_plot.png", plot = plot_HSI_females,
+       width = 7, height = 5, units = "in", dpi = 600)
+```
+## K analysis (condition factor)
+```{r K}
+#Diagnostic on standard lm
+model_K <- lm(log2_K ~ Condition + Exposure, data = Data)
+par(mfrow = c(2, 2))
+plot(model_K, main = "K")
+#residuals vs fitted = random scatter around zero --> good
+#QQ plot some outliers --> rlm
+
+cooksd <- cooks.distance(model_K)
+threshold <- 4 / (nrow(Data) - length(coef(model_K)))
+outliers <- which(cooksd > threshold)
+outliers
+Data[outliers, ]
+
+#Robust regression
+model_K_robust <- rlm(log2_K ~ Condition + Exposure, data = Data)
+
+#Omnibus F-test
+f.robftest(model_K_robust, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS",
+                                   "ConditionAcidTemp", "ConditionAcidPFOS",
+                                   "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_K_robust, var = "Exposure3")
+#Huge exposure effect --> makes sense as expo 2 fish are older --> bigger
+
+#Sensitivity check: ANOVA without outliers (exploratory)
+Data_no_out <- Data[!(rownames(Data) %in% outliers), ]
+model_K_aov <- aov(log2_K ~ Condition + Exposure, data = Data_no_out)
+summary(model_K_aov)
+
+#Dunnett: each treatment vs Control
+emm <- emmeans(model_K_robust, ~ Condition)
+contrast(emm, method = "trt.vs.ctrl", ref = "Control")
+
+#All pairwise comparisons (BH-adjusted)
+pairs(emm, adjust = "BH")
+
+#Compact letter display
+cld_df <- as.data.frame(cld(emm, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+#Sample sizes
+n_df <- Data %>%
+  filter(!is.na(log2_K)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0("n=", n))
+
+#Plot
+K_plot_females <- ggplot(Data, aes(x = Condition, y = log2_K, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 2.3, label = .group),
+            size = 5, color = "black", inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = 0.1, label = label),
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  labs(y = "Log2 K (condition factor)", x = "", title = "K") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+K_plot_females
+
+ggsave("K_plot.png", plot = K_plot_females,
+       width = 7, height = 5, units = "in", dpi = 600)
+```
+## Mixture effects - factorial ANOVA
+The 8 conditions are a 2×2×2 factorial (Acid × Temp × PFOS presence/absence).
+Decomposing Condition into 3 binary factors tests for additive vs interactive mixture effects.
+
+```{r}
+#Build 3 binary stressor factors from Condition
+Data <- Data %>%
+  mutate(
+    Acid_f = factor(grepl("Acid", Condition), levels = c(FALSE, TRUE), labels = c("No", "Yes")),
+    Temp_f = factor(grepl("Temp", Condition), levels = c(FALSE, TRUE), labels = c("No", "Yes")),
+    PFOS_f = factor(grepl("PFOS", Condition), levels = c(FALSE, TRUE), labels = c("No", "Yes"))
+  )
+
+#Sanity check: each Condition maps to the right combination
+table(Data$Condition, Data$Acid_f)
+table(Data$Condition, Data$Temp_f)
+table(Data$Condition, Data$PFOS_f)
+
+#Factorial ANOVA for each endpoint
+#Significant main effects --> that stressor has an effect on average across all combinations
+#Significant 2-way interaction --> non-additive mixture effect (synergy or antagonism) = the effects of X differs depending on Y present or not
+#Significant 3-way interaction --> triple-mixture behaves differently than 2-way predicts 
+
+cat("\n===== LENGTH =====\n")
+Anova(lm(log2_Length ~ Acid_f * Temp_f * PFOS_f + Exposure, data = Data), type ="II")
+
+cat("\n===== WEIGHT =====\n")
+Anova(lm(log2_Weight_mg ~ Acid_f * Temp_f * PFOS_f + Exposure, data = Data), type ="II")
+
+cat("\n===== HSI =====\n")
+Anova(lm(log2_HSI ~ Acid_f * Temp_f * PFOS_f + Exposure, data = Data), type ="II")
+
+cat("\n===== K =====\n")
+Anova(lm(log2_K ~ Acid_f * Temp_f * PFOS_f + Exposure, data = Data), type ="II")
+```
+## Create the final figure
+```{r}
+combined_plot <- (length_plot_females + weight_plot_females) /
+                 (plot_HSI_females + K_plot_females) +
+  plot_annotation(tag_levels = "A")
+
+combined_plot
+
+ggsave("Fig_morphology_females.png", plot = combined_plot,
+       width = 14, height = 10, units = "in", dpi = 600)
+```
+## Summary
+Robust reductions in length and weight are observed under some conditions, 
+while K remains unchanged, suggesting stress-induced 
+reduction in somatic growth without disproportionate changes in body composition. 
+Factorial ANOVA reveals significant Acid × PFOS interactions for length and weight, 
+as well as Acid × Temp and Acid × PFOS × Temp interactions for weight, indicating 
+non-additive mixture effects.   
+
+## Session info
+```{r session_info}
+sessionInfo()
+```
+
+
+
