@@ -4,7 +4,7 @@ Morphometric analysis of adult female zebrafish following developmental exposure
 ## Files
 - `.Rmd` — Analysis source code
 - `.html` — Rendered analysis
-- `.xlsx` files — Input data (morphometric measurements + metadata)
+- `.xlsx` file — Input data (morphometric measurements + metadata)
 
 ## Analysis pipeline
 - Endpoints measured: standard length, body weight, liver weight, brain weight, gut weight, gonad weight
