@@ -28,11 +28,6 @@ knitr::opts_chunk$set(
 	echo = TRUE,
 	message = FALSE,
 	warning = FALSE)
-```
-
-```{r Prepare the working environment}
-setwd("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology")
-rm(list = ls()) # clean the global environment, good coding practice 
 
 getwd()
 list.files()
@@ -63,7 +58,7 @@ R.version
 
 # Cells density
 ```{r}
-Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
+Data <- read_excel("EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
 
 # Gather cell count by individual to avoid pseudo replication
 Data_mean <- aggregate(Num_detection ~ ID + Condition + Expo,data = Data, FUN = mean)
@@ -252,7 +247,7 @@ plot2
 # Sensitivity check
 ## Cell density
 ```{r}
-Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
+Data <- read_excel("EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
 # Gather cell count by individual to avoid pseudo replication
 Data_mean <- aggregate(Num_detection ~ ID + Condition + Expo,data = Data, FUN = mean)
 
@@ -296,7 +291,7 @@ Sensitivity analysis show that excluding the single Expo1 individual did not qua
 
 ## Lipid %
 ```{r}
-Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
+Data <- read_excel("EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
 
 # Gather cell count by individual to avoid pseudo replication
 Data_mean <- aggregate(Pourcentage ~ ID + Condition + Expo,data = Data, FUN = mean)
