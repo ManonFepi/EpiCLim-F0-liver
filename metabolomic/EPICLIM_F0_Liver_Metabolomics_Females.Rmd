@@ -57,12 +57,6 @@ knitr::opts_chunk$set(
 	warning = FALSE)
 ```
 
-```{r Prepare the working environment}
-#setwd("Path to the folder with the raw files")
-rm(list = ls()) # clean the global environment, good coding practice 
-getwd()
-```
-
 # Import dataset
 
 ```{r}
