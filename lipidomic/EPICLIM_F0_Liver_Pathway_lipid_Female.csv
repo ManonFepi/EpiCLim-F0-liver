@@ -1,0 +1,43 @@
+﻿Pathway;Pathway_total;Hits_total;Hits_sig;Expected;P_Fisher;P_EASE;P_Gamma;Emp_Hits;Empirical;AdjP_Fisher;AdjP_EASE;AdjP_Gamma;Pathway_Number;cpd_hits;Condition;Sex;EnrichFactor;BiologicalFunction
+Linoleate metabolism;30;6;3;0,34646;0,036826;0,28067;0,00063053;1;0,01;0,589216;1;0,01008848;P3;"EC00070;EC000108";Acid;Female;8,659008255;Lipid metabolism
+Glycosphingolipid metabolism;56;9;4;0,95276;0,05359;0,20632;0,00067692;9;0,09;0,75026;1;0,01008848;P4;"EC00017;EC00021;EC00057";Acid;Female;4,198329065;Glycan biosynthesis and metabolism
+Omega-3 fatty acid metabolism;38;3;3;0,69291;0,14145;0,48834;0,00098558;7;0,07;1;1;0,01182696;P6;"EC00075;EC00090";Acid;Female;4,32956661;Lipid metabolism
+Glycerophospholipid metabolism;146;13;4;1,4724;0,16306;0,39412;0,0010821;7;0,07;1;1;0,0119031;P7;"EC00014;EC00021;EC00090";Acid;Female;2,716653083;Lipid metabolism
+Squalene and cholesterol biosynthesis;53;9;3;0,34646;0,30505;1;0,0020227;4;0,04;1;1;0,0182043;P11;EC00014;Acid;Female;8,659008255;Lipid metabolism
+De novo fatty acid biosynthesis;73;7;3;1,5591;0,4779;0,79326;0,0044942;59;0,59;1;1;0,026637;P13;"EC00017;EC00090";Acid;Female;1,924187031;Lipid metabolism
+Fatty acid activation;78;9;3;2,0787;0,65092;0,88494;0,010685;69;0,69;1;1;0,026637;P16;"EC00017;EC00090";Acid;Female;1,443209698;Lipid metabolism
+Fatty Acid Metabolism;35;3;3;0,56693;0,0087008;0,085127;0,00056837;0;0;0,21752;1;0,01420925;P1;"EC00014;EC00017;EC00020";Temp;Female;5,291658582;Lipid metabolism
+Linoleate metabolism;30;6;6;0,56693;0,0087008;0,085127;0,00056837;0;0;0,21752;1;0,01420925;P2;"EC00070;EC000107;EC000108";Temp;Female;10,58331716;Lipid metabolism
+C21-steroid hormone biosynthesis and metabolism;77;14;7;0,99213;0,057389;0,23348;0,00069772;3;0,03;1;1;0,01604756;P3;"EC00014;EC00048;EC00082";Temp;Female;7,055526997;Lipid metabolism
+Glycosphingolipid metabolism;56;9;4;1,5591;0,18596;0,44546;0,0012099;23;0,23;1;1;0,0193584;P10;"EC00017;EC00021;EC000103";Temp;Female;2,565582708;Glycan biosynthesis and metabolism
+Glycerophospholipid metabolism;146;13;5;2,4094;0,44037;0,70039;0,0037941;37;0,37;1;1;0,0417351;P15;"EC00014;EC00016;EC00021";Temp;Female;2,075205445;Lipid metabolism
+Squalene and cholesterol biosynthesis;53;9;3;0,56693;0,45883;1;0,0041381;20;0,2;1;1;0,0417351;P16;EC00014;Temp;Female;5,291658582;Lipid metabolism
+De novo fatty acid biosynthesis;73;7;3;2,5512;0,48254;0,73289;0,0046306;55;0,55;1;1;0,0417351;P17;"EC00016;EC00017;EC00059";Temp;Female;1,175917215;Lipid metabolism
+Vitamin A (retinol) metabolism;55;14;5;2,2677;0,69848;0,91261;0,013881;56;0,56;1;1;0,097167;P19;"EC00016;EC00034";Temp;Female;2,204877188;Cofactors and vitamins
+Fatty acid activation;78;9;4;3,4016;0,70241;0,87409;0,014186;71;0,71;1;1;0,097167;P20;"EC00016;EC00017;EC00059";Temp;Female;1,175917215;Lipid metabolism
+Glycosphingolipid metabolism;56;9;5;1,4496;0,03765;0,13625;0,00054361;7;0,07;0,8283;1;0,01195942;P1;"EC00017;EC00022;EC00037;EC000106";PFOS;Female;3,449227373;Glycan biosynthesis and metabolism
+Linoleate metabolism;30;6;3;0,52713;0,082739;0,41254;0,00066247;6;0,06;1;1;0,01391187;P3;"EC00072;EC000110";PFOS;Female;5,69119572;Lipid metabolism
+Glycerophospholipid metabolism;146;13;3;2,2403;0,69109;0,90877;0,012516;66;0,66;1;1;0,08463;P17;"EC00022;EC00037";PFOS;Female;1,33910637;Lipid metabolism
+Fatty Acid Metabolism;35;3;3;0,58915;0,0098104;0,092043;0,00056988;4;0,04;0,2158288;1;0,01253736;P1;"EC00014;EC00017;EC00019";AcidTemp;Female;5,092081813;Lipid metabolism
+Saturated fatty acids beta-oxidation;27;3;3;0,58915;0,0098104;0,092043;0,00056988;3;0,03;0,2158288;1;0,01253736;P2;"EC00017;EC00019;EC00060";AcidTemp;Female;5,092081813;Lipid metabolism
+Fatty acid activation;78;9;4;3,5349;0,25369;0,43406;0,00162;29;0,29;1;1;0,02592;P7;"EC00017;EC00092;EC000117;EC000118;EC000119";AcidTemp;Female;1,131573736;Lipid metabolism
+Omega-3 fatty acid metabolism;38;3;3;1,1783;0,33084;0,70724;0,0022831;15;0,15;1;1;0,0319634;P10;"EC00076;EC00092";AcidTemp;Female;2,546040906;Lipid metabolism
+Vitamin A (retinol) metabolism;55;14;4;2,5039;0,46859;0,72384;0,0043057;25;0,25;1;1;0,0473627;P12;"EC000120;EC000121;EC000122";AcidTemp;Female;1,597507888;Cofactors and vitamins
+Squalene and cholesterol biosynthesis;53;9;3;0,58915;0,47275;1;0,0043913;16;0,16;1;1;0,0473627;P14;EC00014;AcidTemp;Female;5,092081813;Lipid metabolism
+De novo fatty acid biosynthesis;73;7;3;2,6512;0,78417;0,94456;0,022605;73;0,73;1;1;0,113088;P20;"EC00017;EC00092";AcidTemp;Female;1,131563066;Lipid metabolism
+Tyrosine metabolism;107;6;5;0,66929;0,0010219;0,013944;0,00049893;0;0;0,0286132;0,390432;0,01397004;P1;"EC0007;EC0008;EC00036;EC00042";PFOSTemp;Female;7,470603177;Amino acid
+Valine- leucine and isoleucine degradation;66;6;5;0,66929;0,016713;0,11732;0,00053371;4;0,04;0,451251;1;0,01441017;P2;"EC0008;EC00013;EC00031";PFOSTemp;Female;7,470603177;Amino acid
+Aspartate and asparagine metabolism;84;11;3;1,2047;0,098866;0,31267;0,00076165;13;0,13;1;1;0,01904125;P4;"EC0004;EC0008;EC00061";PFOSTemp;Female;2,490246534;Amino acid
+Butanoate metabolism;31;3;3;0,13386;0,13281;1;0,00088361;8;0,08;1;1;0,0210144;P7;EC0008;PFOSTemp;Female;22,41147468;Carbohydrate metabolism
+C21-steroid hormone biosynthesis and metabolism;77;14;4;0,93701;0,64069;1;0,0098428;44;0,44;1;1;0,0590568;P23;EC00048;PFOSTemp;Female;4,268897877;Lipid metabolism
+Fatty acid activation;78;9;3;3,2126;0,65997;0,8489;0,010919;67;0,67;1;1;0,0590568;P24;"EC00017;EC00092;EC000112";PFOSTemp;Female;0,933823072;Lipid metabolism
+Squalene and cholesterol biosynthesis;53;9;3;0,31496;0,28067;1;0,0018977;5;0,05;1;1;0,0208747;P5;EC00014;AcidPFOS;Female;9,52501905;Lipid metabolism
+Vitamin A (retinol) metabolism;55;14;3;1,2598;0,36297;0,71176;0,0027369;19;0,19;1;1;0,0218952;P6;"EC00025;EC00026";AcidPFOS;Female;2,38133037;Cofactors and vitamins
+Arachidonic acid metabolism;73;17;11;1,2598;0,75052;1;0,018879;74;0,74;1;1;0,037758;P12;EC00072;AcidPFOS;Female;8,73154469;Lipid metabolism
+Omega-3 fatty acid metabolism;38;3;3;1,0709;0,071942;0,26199;0,0007398;1;0,01;1;1;0,0192348;P1;"EC00074;EC00090;EC00091";AcidPFOSTemp;Female;2,801382015;Lipid metabolism
+Valine- leucine and isoleucine degradation;66;6;4;0,66929;0,13074;0,49293;0,00095013;17;0,17;1;1;0,02375325;P2;"EC0008;EC00031";AcidPFOSTemp;Female;5,976482541;Amino acid
+Butanoate metabolism;31;3;3;0,13386;0,13281;1;0,00095861;4;0,04;1;1;0,02375325;P3;EC0008;AcidPFOSTemp;Female;22,41147468;Carbohydrate metabolism
+Glycosphingolipid metabolism;56;9;3;1,4724;0,16306;0,41224;0,0010916;20;0,2;1;1;0,02375325;P7;"EC00017;EC00037;EC00057";AcidPFOSTemp;Female;2,037489813;Glycan biosynthesis and metabolism
+Fatty acid activation;78;9;4;3,2126;0,18689;0,34853;0,00121;12;0,12;1;1;0,02375325;P8;"EC00017;EC00090;EC00091;EC000114;EC000115";AcidPFOSTemp;Female;1,245097429;Lipid metabolism
+C21-steroid hormone biosynthesis and metabolism;77;14;6;0,93701;0,23348;0,61674;0,0014822;16;0,16;1;1;0,0266796;P9;"EC00048;EC00082";AcidPFOSTemp;Female;6,403346816;Lipid metabolism
+De novo fatty acid biosynthesis;73;7;3;2,4094;0,44037;0,69848;0,0037715;31;0,31;1;1;0,0406623;P23;"EC00017;EC00090;EC00091";AcidPFOSTemp;Female;1,245123267;Lipid metabolism

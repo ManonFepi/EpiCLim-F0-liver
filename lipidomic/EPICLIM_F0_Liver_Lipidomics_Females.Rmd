@@ -1,0 +1,1578 @@
+---
+title: "Epiclim Liver Lipidomic - F0 adult females"
+author: "Baptiste Ducarme"
+date: "2025-10-14"
+output: 
+  html_document:
+    code_folding: show       # Montre le code dans le document
+    number_sections: true    # Ajout table des matières 
+    toc: true                # Table des matiere 
+    toc_float: true          # Table des matières flottante
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+# Introduction
+
+This script was used to perform liver lipid profiling in adult female zebrafish (15.5–16.5 months post-fertilization) following developmental exposure (2 hpf to 28 dpf) to combined climate stressors, including acidification (pH 6.35) and elevated temperature (32°C), as well as PFOS exposure (nominal concentration: 2 µg/L), using a 2 × 2 × 2 factorial design.
+
+The lipidomic data, consisting of m/z, retention time features and their associated intensities, were first preprocessed in MZmine, including peak detection, alignment, normalization to internal standards, and filtering based on the %RSD of pooled quality control samples. The resulting dataset, used for all downstream analyses, contained both identified and unidentified features across all samples.
+
+The data were first filtered to retain only features present in at least three samples per condition. To address the few missing values, K-nearest neighbor (KNN) imputation was applied, followed by log2 transformation and Pareto scaling to stabilize variance and approximate normality.
+
+Principal component analysis (PCA) was then performed on the transformed data to visualize the overall sample distribution. Differential analysis was conducted using the limma framework, with experimental condition and exposure included as model factors. Contrasts of interest were defined for each condition versus the control, and MA plots were generated as diagnostic plots. In addition to determining whether each combination treatment elicited a response beyond that predicted by the corresponding individual stressors, pairwise comparisons were performed between each combination treatment and its respective single-stressor treatments.
+
+From the limma output for the condition-versus-control contrasts, the m/z, retention time, t-statistic, and raw p-value were extracted for subsequent pathway analysis. Pathway enrichment analysis was conducted using Mummichog (version 2) in positive-ionization mode, with a mass tolerance of 5 ppm and enforcement of primary ions. The top 10% of peaks ranked by p-value were selected as the significance cutoff. The *Danio rerio* (`dre_mtf`) pathway library was used, including only pathway sets containing at least three features. To estimate the null distribution, 100 random permutations were performed. Statistically significant metabolic pathway alterations were defined as those with a Gamma p-value < 0.05 and Hits sig ≥ 3.
+
+# Load required packages
+```{r package}
+library("readxl") # open data
+library("dplyr") # code in pipe
+library("ggplot2") # for graph
+library("rstatix") # Analyse stat
+library("gridExtra") # For graph alignment
+library("ggpubr")# for stat link with ggplot
+library("lubridate") #for timpoint analysis
+library("multcomp")# stat and letter
+library('AER')# stat and letter
+library("stringr")
+library("ggExtra") # PCA
+library("tidyverse") # includes ggplot2, for data visualisation. dplyr, for data manipulation.
+library("RColorBrewer") # for a colourful plot
+library("ggrepel") # for nice annotations
+
+R.version
+```
+
+# Working environment setup
+
+```{r Prepare the working environment}
+setwd("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids")
+rm(list = ls()) # clean the global environment, good coding practice 
+```
+
+# Import dataset
+```{r}
+counts <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "NormData")
+```
+
+## Data treatment
+```{r}
+count<-as.matrix(counts)
+head(counts) 
+
+# Convert to matrix
+counts_matrix <- as.matrix(counts) 
+
+# Lipid matrix with the first column as name
+Lipid_names <- counts[[1]] 
+counts_matrix <- as.matrix(counts[,-1]) 
+counts_matrix <- matrix(as.numeric(counts_matrix), nrow = nrow(counts_matrix))
+rownames(counts_matrix) <- Lipid_names
+colnames(counts_matrix) <- colnames(counts)[-1] 
+head(counts_matrix,1)
+tail(counts_matrix,1)
+str(counts_matrix)
+```
+
+# Import MetaData
+
+```{r}
+metadata<-read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "Metadata")
+```
+
+## MetaData treatment
+```{r}
+head(metadata)
+metadata <- metadata %>%rename("Sample"= "name")
+metadata <- metadata %>%rename("Fish_nb"= "Fish nb")
+colnames(metadata)
+
+metadata$Sample <- factor(metadata$Sample)
+metadata$Condition <- factor(metadata$Condition)
+metadata$Exposure <- factor(metadata$Exposure)
+metadata$Sex <- factor(metadata$Sex)
+metadata$Fish_nb <- factor(metadata$Fish_nb)
+
+library("tibble")
+metadata <- column_to_rownames(metadata, var = "Sample")
+metadata <- metadata[colnames(counts_matrix), ]
+
+# confirm alignment
+all(rownames(metadata) == colnames(counts_matrix))
+str(metadata)
+
+dim(counts_matrix)
+# number of female samples per condition
+table(metadata$Condition)
+```
+
+
+## Missing value
+
+[Naniar package](https://naniar.njtierney.com)
+
+[Shadow Matrix](https://cran.r-project.org/web/packages/naniar/vignettes/getting-started-w-naniar.html)
+
+```{r fig.height=8, fig.width=14}
+library("naniar")
+# diagnostic
+mcar_test(as.data.frame(counts_matrix)) 
+
+# missing data heatmap
+vis_miss(as.data.frame(counts_matrix))
+```
+
+*Fig. 1. Heatmap of missing data across samples.* Black squares indicate missing values, and grey squares represent detected metabolites.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+# logical matrix of missing values (shadow matrix) 
+missing_mat <- is.na(counts_matrix)
+missing_per_sample <- colMeans(missing_mat) * 100
+missing_df <- data.frame( Sample = names(missing_per_sample), MissingPercent = missing_per_sample )
+missing_df <- cbind(missing_df, metadata[missing_df$Sample, c("Condition", "Sex")])
+# Sort the data
+missing_df$Condition <- factor(missing_df$Condition , levels = c("AcidPFOSTemp",
+                                                                 "AcidPFOS",
+                                                                 "PFOSTemp",
+                                                                 "AcidTemp",
+                                                                 "PFOS",
+                                                                 "Temp",
+                                                                 "Acid",
+                                                                 "Control"))
+
+ggplot(missing_df, aes(x = MissingPercent, y = Condition, fill = Condition)) +
+  geom_boxplot() +
+  theme_bw()+
+  labs(
+    title = "",
+    x = "Missing Values (%)",
+    y = ""
+  ) +
+  scale_fill_manual(values = c("Control" = "#4C78A8",
+                               "Acid" = "#59A14F",
+                               "Temp" = "#E45756",
+                               "PFOS" = "#B279A2",
+                               "AcidTemp" = "#8C6D1F",
+                               "PFOSTemp" = "#AD1457",
+                               "AcidPFOS" = "#5B6D5B",
+                               "AcidPFOSTemp" = "#7B3F5A")) +
+  theme(legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)) +
+  coord_cartesian(xlim = c(0, 100))
+```
+
+*Fig. 2. Boxplot showing the percentage of missing data across samples.* Colors indicate the experimental condition.
+
+## Filtration
+
+```{r}
+# Convert to long format
+long_data <- as.data.frame(counts_matrix) %>%
+  rownames_to_column("Compound") %>%
+  pivot_longer(
+    cols = -Compound,
+    names_to = "Sample",
+    values_to = "Value")
+
+# add metadata
+long_data <- long_data %>%
+  left_join(metadata %>%rownames_to_column("Sample"), by = "Sample")
+
+# Count the number of valid replicate per compound, Condition and Sex
+valid_counts <- long_data %>%
+  group_by(Compound, Condition, Sex) %>%
+  summarise(n_valid = sum(!is.na(Value)), .groups = "drop")
+
+# List of valid compound (at least 3 valids replicated per condition and sex)
+compound_to_keep <- valid_counts %>%
+  group_by(Compound) %>%
+  summarise(all_groups_ok = all(n_valid >= 3)) %>%
+  filter(all_groups_ok) %>%
+  pull(Compound)
+
+# Keep only the valid sample
+counts_matrix <- counts_matrix[rownames(counts_matrix) %in% compound_to_keep, ]
+```
+
+```{r fig.height=8, fig.width=14}
+# missing data heatmap
+vis_miss(as.data.frame(counts_matrix))
+```
+
+*Fig. 3. Heatmap of missing data across samples, after filtration.* Black squares indicate missing values, and grey squares represent detected features.
+
+
+## Inputation (KNN)
+
+[Impute package](https://bioconductor.org/packages/release/bioc/manuals/impute/man/impute.pdf).
+
+Imputation with K-Nearest Neighbors (KNN) estimates missing values in a dataset by considering the values of the closest data points, determined by a distance metric (ussually Euclidean distance). The missing value is then assigned the average of these nearest neighbors’ values, weighted by their proximity ([Sole Galli, 2024](https://www.blog.trainindata.com/knn-imputation-of-missing-values-in-machine-learning/))
+
+**Advantages:**
+
+-   Provides more accurate results than simpler methods like mean or median imputation, especially for complex datasets (Accuracy) ([Piyush Kashyap, 2024](https://medium.com/@piyushkashyap045/handling-missing-values-in-data-a-beginner-guide-to-knn-imputation-30d37cc7a5b7)).
+
+-   Preserve the original variable distribution (preserves the local structure and relationships within the dataset) ([Sole Galli, 2024](https://www.blog.trainindata.com/knn-imputation-of-missing-values-in-machine-learning/)).
+
+-   KNN does not make assumptions about the data distribution, making it flexible for various types of datasets ([Sole Galli, 2024](https://www.blog.trainindata.com/knn-imputation-of-missing-values-in-machine-learning/)).
+
+**Disavantage:**
+
+-   Computationally Expensive: KNN requires distance calculations, which can be slow for large datasets [Piyush Kashyap, 2024](https://medium.com/@piyushkashyap045/handling-missing-values-in-data-a-beginner-guide-to-knn-imputation-30d37cc7a5b7).
+
+-   KNN algorithms do not scale, so their application is usually limited to smaller dataset ([Sole Galli, 2024](https://www.blog.trainindata.com/knn-imputation-of-missing-values-in-machine-learning/)).
+
+-   If too many missing values exist, it struggles to find suitable neighbors ([Taran Kau, 2025](https://medium.com/@tarangds/knn-imputation-the-complete-guide-146f932870a7)).
+
+```{r}
+# removed pooled samples, could affect the imputation methods
+metadata <- metadata[metadata$Condition != "Pooled", ]
+# Subset centred_counts to only male columns
+counts_matrix <- counts_matrix[, rownames(metadata)]
+# check dimensions
+dim(counts_matrix)
+table(metadata$Condition)
+```
+
+```{r fig.height=8, fig.width=14}
+library("impute")
+imputed <- impute.knn(as.matrix(counts_matrix))$data
+dim(imputed)
+
+# Missing data heatmap
+vis_miss(as.data.frame(imputed))
+```
+
+*Fig. 4. Heatmap of missing data across samples, after imputation.* Black squares indicate missing values, and grey squares represent detected metabolites
+
+## Transformation
+
+A log transformation helps to remove heteroscedasticity from the data and correct for a skewed data distribution ([Grace & Hudson](http://dx.doi.org/10.5772/65405)).
+
+```{r}
+# add a small constant to avoid log(0)
+log_counts <- log2(imputed + 1e-9)
+
+dim(log_counts)
+```
+
+## Pareto scaling
+
+Scaling aims to correct for differences in the magnitude and variance of lipid features by transforming the data relative to a scaling factor. In omics datasets, scaling is applied for several reasons, including reducing differences in feature scale, addressing heteroscedasticity, and improving comparability among subsets of variables with different abundance ranges [(Sun & Xia, 2024)](https://doi.org/10.1016/j.gendis.2023.04.018)..
+
+Pareto scaling provides an intermediate scaling effect between no scaling and unit variance scaling by dividing each mean-centered variable by the square root of its standard deviation [(Sun & Xia, 2024)](https://doi.org/10.1016/j.gendis.2023.04.018).. This approach reduces the influence of highly abundant features while preserving more of the original variance structure compared with unit variance scaling.
+
+In contrast, auto scaling (i.e., mean centering followed by division by the standard deviation) gives equal weight to all variables, which can increase the relative contribution of low-abundance variables that may be more susceptible to measurement error [(Grace & Hudson)](http://dx.doi.org/10.5772/65405).
+
+```{r}
+library("IMIFA")
+centred_counts<-pareto_scale(log_counts,centering = TRUE)
+```
+
+```{r}
+# Log2
+df_Log2 <- as.data.frame(log_counts) %>%
+  pivot_longer(everything(), names_to = "Sample", values_to = "Intensity") %>%
+  mutate(Status = "Before Pareto")
+
+# Pareto
+df_Pareto <- as.data.frame(centred_counts) %>%
+  pivot_longer(everything(), names_to = "Sample", values_to = "Intensity") %>%
+  mutate(Status = "After Pareto")
+
+# combine
+df_plot <- bind_rows(df_Log2, df_Pareto)
+df_plot$Status <- factor(df_plot$Status, levels = c("Before Pareto", "After Pareto"))
+
+# density plots 
+ggplot(df_plot, aes(x = Intensity, fill = Status, color = Status)) +
+  geom_density(alpha = 0.3) +
+  facet_wrap(~Status, scale="free") +
+  labs(title = "",
+    x = "Intensity",
+    y = "Density") + 
+  theme_bw() + 
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey20")
+```
+
+*Fig. 5. Density plot showing data transformation and centering across the entire dataset.* The plot includes data before Pareto scaling (already log2-transformed) and after Pareto scaling (centered and scaled).
+
+# PCA
+```{r fig.height=6, fig.width=12}
+pca_res <- prcomp(t(centred_counts), scale. = FALSE)
+var_exp <- round(100 * (pca_res$sdev^2 / sum(pca_res$sdev^2))[1:2], 1)
+
+# PCA dataframe 
+pca_df <- data.frame(Sample = colnames(centred_counts),
+                     PC1 = pca_res$x[,1], 
+                     PC2 = pca_res$x[,2],
+                     Condition = metadata$Condition,
+                     Exposure = metadata$Exposure)
+
+pca_df$Condition <- factor(pca_df$Condition, levels = c("Control", "Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+
+# Distribution by Exposure
+PCA_Female_1 <-ggplot(pca_df, aes(x = PC1, y = PC2, color = Exposure)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  scale_color_manual(values = c("expo_2" = "grey", "expo_3" = "orange")) + 
+  labs(title = "", x = paste0("PC1 (", var_exp[1], "%)"),
+       y = paste0("PC2 (", var_exp[2], "%)")) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank())
+
+PCA_Female_2 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Condition)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  scale_color_manual(values = c("Control" = "#4C78A8",
+                               "Acid" = "#59A14F",
+                               "Temp" = "#E45756",
+                               "PFOS" = "#B279A2",
+                               "AcidTemp" = "#8C6D1F",
+                               "PFOSTemp" = "#AD1457",
+                               "AcidPFOS" = "#5B6D5B",
+                               "AcidPFOSTemp" = "#7B3F5A"))  +
+  labs(
+    title = "",
+    x = paste0("PC1 (", var_exp[1], "%)"),
+    y = paste0("PC2 (", var_exp[2], "%)")
+  ) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.x = element_text(hjust = 1, size = 10),
+        strip.text.x = element_text(size = 10),
+        legend.text = element_text(size = 8))
+
+PCA_Female_3 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Condition)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  scale_color_manual(values = c("Control" = "#4C78A8",
+                               "Acid" = "#59A14F",
+                               "Temp" = "#E45756",
+                               "PFOS" = "#B279A2",
+                               "AcidTemp" = "#8C6D1F",
+                               "PFOSTemp" = "#AD1457",
+                               "AcidPFOS" = "#5B6D5B",
+                               "AcidPFOSTemp" = "#7B3F5A"))  +
+  stat_ellipse(level = 0.68, type = "t") +  # 95% CI ellipse
+  labs(
+    title = "",
+    x = paste0("PC1 (", var_exp[1], "%)"),
+    y = paste0("PC2 (", var_exp[2], "%)")
+  ) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank())
+
+pca_female_df<-pca_df
+var_exp_female <- var_exp
+
+ggarrange(PCA_Female_1, PCA_Female_2,PCA_Female_3, ncol = 3, nrow = 1, labels = "AUTO", legend = "bottom")
+```
+
+*Fig. 6. Principal component analysis (PCA) of log2-transformed and KNN-imputed data.* (A) Colored by experimental exposure (B) Colored by experimental condition (C) inlcuding 95% confidence elipse.
+
+# Limma
+
+[Pipeline limma](https://ucdavis-bioinformatics-training.github.io/2018-June-RNA-Seq-Workshop/thursday/DE.html)
+
+```{r}
+library("limma")
+# drop unused factor levels
+metadata$Sex <- droplevels(metadata$Sex)
+metadata$Condition <- droplevels(metadata$Condition)
+metadata$Exposure <- droplevels(metadata$Exposure)
+
+# keep only matching samples in scaled_counts
+centred_counts <- centred_counts[, rownames(metadata)]
+
+# confirm alignment
+stopifnot(all(colnames(centred_counts) == rownames(metadata)))
+
+# Recreate the design matrix
+design <- model.matrix(~ 0 + Condition + Exposure, data = metadata)
+colnames(design)
+
+fit <- lmFit(centred_counts, design)
+
+# contrast matix
+contr.matrix<-makeContrasts(
+Acid_Female = ConditionAcid - ConditionControl,
+Temp_Female = ConditionTemp - ConditionControl,
+PFOS_Female = ConditionPFOS - ConditionControl,
+AcidTemp_Female = ConditionAcidTemp - ConditionControl,
+AcidPFOS_Female = ConditionAcidPFOS - ConditionControl,
+PFOSTemp_Female = ConditionPFOSTemp - ConditionControl,
+AcidPFOSTemp_Female = ConditionAcidPFOSTemp - ConditionControl,
+levels = design)
+
+# contrast matix
+colnames(design)
+table(metadata$Condition, metadata$Sex)
+colnames(design)
+
+fit <- lmFit(centred_counts, design)
+fit2 <- contrasts.fit(fit, contr.matrix)
+fit3 <- eBayes(fit2)
+```
+
+```{r}
+summary(decideTests(fit3))
+```
+
+## MA plot
+
+```{r fig.height=8, fig.width=14}
+par(mfrow = c(4, 4))
+limma::plotMA(fit2, coef = "Acid_Female", main = "MA-plot Acid vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "Temp_Female", main = "MA-plot Acid vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "PFOS_Female", main = "MA-plot PFOS vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "AcidTemp_Female", main = "MA-plot AcidTemp vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "PFOSTemp_Female", main = "MA-plot PFOSTemp vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "AcidPFOS_Female", main = "MA-plot AcidPFOS vs Control: Female")+abline(h = 0, col = "red")
+limma::plotMA(fit2, coef = "AcidPFOSTemp_Female", main = "MA-plot AcidPFOSTemp vs Control: Female")+abline(h = 0, col = "red")
+par(mfrow = c(1, 1))
+```
+
+*Fig. 7. MA plots of log2-transformed, KNN-imputed lipids data.* Values are shown before empirical Bayes adjustment. Each plot represents a contrast between experimental conditions and control. The y-axis (M) shows log2-fold changes, and the x-axis (A) shows average log2 expression across samples. Contrasts include Acid vs Control, Temp vs Control, PFOS vs Control, AcidTemp vs Control, AcidPFOS vs Control, PFOSTemp vs Control, and AcidPFOSTemp vs Control.
+
+## Volcanoplot
+[Volocanoplot](https://biostatsquid.com/volcano-plots-r-tutorial/)
+
+The points on the plot represent the analyzed elements. Those near the center, close to zero on the X-axis, indicate little to no change and are not significantly different. Points further to the left or right suggest substantial changes in expression or abundance, indicating up regulation or down regulation. Points higher up on the plot are statistically more significant. The most notable elements are often found in the upper left or right corners, where a strong biological effect (large fold change) aligns with high statistical significance.
+
+### Acid_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="Acid_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "Acid"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the conpound name
+
+# Volcanoplot
+Volcano_1<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "Acid vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5)) +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+Acid_Female_df<- df
+DEM_Acid_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-Acid_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "Acid_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### Temp_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="Temp_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "Temp"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_2<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "Temp vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5)) +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+Temp_Female_df<- df
+
+DEM_Temp_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-Temp_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "Temp_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### PFOS_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="PFOS_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "PFOS"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_3<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "PFOS vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5))  +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+PFOS_Female_df<- df
+
+DEM_PFOS_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-PFOS_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "PFOS_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### AcidTemp_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="AcidTemp_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "AcidTemp"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_4<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "AcidTemp vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5)) +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+AcidTemp_Female_df<- df
+
+DEM_AcidTemp_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-AcidTemp_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "AcidTemp_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### AcidPFOS_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="AcidPFOS_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "AcidPFOS"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_5<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "AcidPFOS vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5))  +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+AcidPFOS_Female_df<- df
+
+DEM_AcidPFOS_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-AcidPFOS_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "AcidPFOS_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### PFOSTemp_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="PFOSTemp_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "PFOSTemp"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_6<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "PFOSTemp vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5)) +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+PFOSTemp_Female_df<- df
+
+DEM_PFOSTemp_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Data frame preparation
+Mummichog_data<-PFOSTemp_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "PFOSTemp_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+### AcidPFOSTemp_vs_Control
+
+```{r}
+data_results<-topTable(fit3, coef="AcidPFOSTemp_Female", sort.by="P", number = Inf)
+data_results$Compound <- rownames(data_results)
+```
+
+```{r}
+# Load the ggtext package
+library("ggtext")
+
+# Subset your group of interest
+df<- data_results[, c("Compound", "logFC","P.Value", "t")]
+
+df$Treatment<- "AcidPFOSTemp"
+df$Sex<- "Female"
+
+# Subset your group of interest
+colnames(df)[colnames(df) == "P.Value"] <- "pval"
+colnames(df)[colnames(df) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+df$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+df$diffexpressed[df$log2fc > 0.6 & df$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+df$diffexpressed[df$log2fc < -0.6 & df$pval < 0.05] <- "DOWN"
+
+# add a colum with IDs but only for the significant protein.
+df$label <- ifelse(df$diffexpressed != "NO", df$Compound, NA)
+# only identified metabolite
+df$label <- ifelse(grepl("^NI@", df$Compound), "", df$label)
+df$label <- sub("@.*", "", df$label) # Keep just the compound name
+
+# Volcanoplot
+Volcano_7<-ggplot(data = df, aes(x = log2fc, y = -log10(pval), col = diffexpressed)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c(paste0("Down (", sum(df$diffexpressed == "DOWN"), ")"),
+                                paste0("Not significant (",sum(df$diffexpressed == "NO"), ")"),
+                                paste0("Up (", sum(df$diffexpressed == "UP"), ")"))) +
+  labs(color = "",
+       title = "AcidPFOSTemp vs Control : Female",
+       x = expression("log"[2]*"(FC)"),
+       y = expression("-log"[10]*"p-value")) +
+  theme_test() +
+  theme(legend.position = "top", 
+        plot.title = element_textbox_simple(
+      hjust = 0.5, # Center alignment
+      halign = 0.5, # Horizontal alignment inside the box
+      fill = "grey90", # Background color
+      color = "black", # Text color
+      box.color = NA, # No border around the background
+      padding = margin(5, 5, 5, 5), # Padding inside the title box
+      margin = margin(10, 0, 10, 0)))+ # Space around the title box
+  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 5)) +
+  geom_text_repel(aes(label = label),# Ajouter les étiquettes pour les points significatifs
+                  size = 2, # Taille du texte
+                  box.padding = 0.5, # Espacement autour du texte
+                  max.overlaps = 200)  # Limite les superpositions
+```
+
+```{r}
+# Subset (usfull for futur analysis)
+AcidPFOSTemp_Female_df<- df
+
+DEM_AcidPFOSTemp_Female <- df[df$diffexpressed != "NO", ]
+```
+
+```{r}
+# Export the DEM in CSV file for Mummichog on metaboAnalyst
+# Data frame preparation
+Mummichog_data<-AcidPFOSTemp_Female_df
+# extract m/z (numbers after "_mz")
+Mummichog_data$mz<- sub(".*_mz([0-9.]+)_.*", "\\1", Mummichog_data$Compound)
+# extract RT (numbers after "@" and before _mz)
+Mummichog_data$RT  <- as.numeric(str_extract(Mummichog_data$Compound, "(?<=@)[0-9.]+"))
+
+head(Mummichog_data)
+
+# restructuration of the data
+Mummichog_data<-Mummichog_data[,c("mz","pval", "t", "RT")]
+
+# Change name to fit with MetaboAnalist expecteation
+colnames(Mummichog_data)[colnames(Mummichog_data) == "mz"]  <- "m.z"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "pval"] <- "p.value"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "t"] <- "t.score"
+colnames(Mummichog_data)[colnames(Mummichog_data) == "RT"] <- "r.t"
+
+# Change the name of the file !!!!
+write.table(
+  Mummichog_data,
+  "AcidPFOSTemp_Female_Liver_MZ_list.csv",
+  sep = ",",           # comma separator
+  dec = ".",           # dot for decimals
+  quote = FALSE,
+  row.names = FALSE)
+```
+
+## Up and down plot
+
+```{r}
+# For all DEP
+combined_df <- rbind(DEM_Acid_Female,
+                     DEM_Temp_Female,
+                     DEM_PFOS_Female,
+                     DEM_AcidTemp_Female,
+                     DEM_PFOSTemp_Female,
+                     DEM_AcidPFOS_Female,
+                     DEM_AcidPFOSTemp_Female)
+
+combined_df<-combined_df[,c("Compound","log2fc","pval","Treatment", "diffexpressed")]
+
+# Summarize the data: count "UP" and "DOWN" for each combination of Treatment and Sex
+# Adjust the counts for stacking: DOWN counts are negative
+summary_counts <- combined_df %>%
+  group_by(Treatment, diffexpressed) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  mutate(Count = ifelse(diffexpressed == "DOWN", -Count, Count))
+
+factor(summary_counts$diffexpressed, levels = c("UP", "DOWN"))
+
+summary_counts$Treatment <- factor(summary_counts$Treatment, levels = c("Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+summary_counts$Sex<- "Female"
+
+
+# Plot the stacked bar chart
+CountPlot_female<-ggplot(summary_counts,
+                     aes(x = Treatment,
+                         y = Count,
+                         fill = factor(diffexpressed, levels = c("UP", "DOWN")))) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(
+    title = "",
+    x = "",
+    y = "Numbers of DELs",
+    fill = "Expression") +
+  geom_text(aes(label = abs(Count)), 
+            position = position_stack(vjust = 0.5), 
+            size = 4, color = "white") +
+  theme_test() +
+  facet_wrap(~Sex) +
+  scale_fill_manual(values = c("UP" = "#bb0c00", "DOWN" = "#00AFBB")) +
+  geom_hline(yintercept = 0, color = "black") +
+  theme(legend.position = c(0.85, 0.85), 
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 10)) +
+  guides(fill = guide_legend(title = NULL))
+
+
+combined_df_female<-combined_df
+combined_df_female$Sex<- "Female"
+```
+
+```{r fig.height=10, fig.width=12}
+ggarrange(Volcano_1, Volcano_2, Volcano_3, Volcano_4, Volcano_5, Volcano_6, Volcano_7,CountPlot_female,  ncol = 3, nrow = 3, labels = "AUTO")
+```
+
+*Fig. 8. Lipids expression analyses comparing treatment groups to the control, in female.* Panels (A–G) show volcano plots for the contrasts: (A) Acid vs. Control, (B) Temp vs. Control, (C) PFOS vs. Control, (D) AcidTemp vs. Control, (E) AcidPFOS vs. Control, (F) PFOSTemp vs. Control, and (G) AcidPFOSTemp vs. Control. The X-axis represents the log₂ fold change (FC), and the Y-axis represents the −log₁₀(p-value) for all lipids (known and unknown). The horizontal line indicates the p-value threshold of 0.05 (on a logarithmic scale). Red dots denote upregulated lipids, blue dots lipids metabolites, and grey dots unchanged lipids. Panel (H) shows a count plot summarizing the differentially expressed lipids (DELs) across all contrasts.
+
+## UpSet plot
+
+UpSet plot provides an efficient way to visualize intersections of multiple sets compared to the traditional approaches, i.e. the Venn Diagram.
+[ComplexHeatmap](https://jokergoo.github.io/ComplexHeatmap-reference/book/upset-plot.html) [UpSetR](https://cran.r-project.org/web/packages/UpSetR/vignettes/basic.usage.html)
+
+```{r}
+library("UpSetR")
+
+# Metabolite of interest (DEM for each condition)
+lt<- list(
+  "Acid" = DEM_Acid_Female$Compound,
+  "Temp" = DEM_Temp_Female$Compound,
+  "PFOS" = DEM_PFOS_Female$Compound,
+  "AcidTemp" = DEM_AcidTemp_Female$Compound,
+  "PFOSTemp" = DEM_PFOSTemp_Female$Compound,
+  "AcidPFOS" = DEM_AcidPFOS_Female$Compound,
+  "AcidPFOSTemp" = DEM_AcidPFOSTemp_Female$Compound)
+
+UpSetR::upset(fromList(lt),
+  order.by = "freq",       # order intersections by frequency
+  keep.order = FALSE,       # keep the order of sets as in the list
+  sets = names(lt))   # explicitly define all sets to include
+```
+
+*Fig. 9. UpSet plot showing intersections of differentially expressed Lipids (DELs) across treatment groups.* Horizontal bars indicate the total number of DELs per group, and vertical bars show the number of DELs shared among specific combinations of groups. Single dots represent group-specific DELs, while connected dots indicate shared DELs
+
+## Combinations vs single_stressor
+
+To determine whether each combination treatment produces a response beyond what any individual stressor alone would predict, pairwise comparisons were made between each combination and its single stressors. These comparisons used the same log2 fold and the same significance thresholds as the vs-Control comparisons (padj \< 0.05, \|log2FC\| ≥ log2(1.5)).
+
+-   A low DELs count in a comparison means the combination have similar profiles to the single stressor.\
+
+-   A high DELs count means the combination is different from the stressor alone.
+
+```{r}
+library("limma")
+# Single vs combination comparisons
+# drop unused factor levels
+metadata$Sex <- droplevels(metadata$Sex)
+metadata$Condition <- droplevels(metadata$Condition)
+metadata$Exposure <- droplevels(metadata$Exposure)
+
+# keep only matching samples in scaled_counts
+centred_counts <- centred_counts[, rownames(metadata)]
+
+# confirm alignment
+stopifnot(all(colnames(centred_counts) == rownames(metadata)))
+
+# Recreate the design matrix
+design <- model.matrix(~ 0 + Condition + Exposure, data = metadata)
+colnames(design)
+
+fit <- lmFit(centred_counts, design)
+
+# contrast matix
+contr.matrix<-makeContrasts(
+  AcidTemp_vs_Acid = ConditionAcidTemp - ConditionAcid, # AcidTemp vs. Acid and Temp
+  AcidTemp_vs_Temp = ConditionAcidTemp - ConditionTemp,
+  PFOSTemp_vs_PFOS = ConditionPFOSTemp - ConditionPFOS,  # PFOSTemp vs. PFOS and Temp
+  PFOSTemp_vs_Temp = ConditionPFOSTemp - ConditionTemp,
+  AcidPFOS_vs_Acid = ConditionAcidPFOS - ConditionAcid,  # AcidPFOS vs. Acid and PFOS  
+  AcidPFOS_vs_PFOS = ConditionAcidPFOS - ConditionPFOS,
+  AcidPFOSTemp_vs_Acid = ConditionAcidPFOSTemp - ConditionAcid,   # AcidPFOSTemp vs. Acid, Temp and PFOS  
+  AcidPFOSTemp_vs_PFOS = ConditionAcidPFOSTemp - ConditionPFOS,
+  AcidPFOSTemp_vs_Temp = ConditionAcidPFOSTemp - ConditionTemp,
+  AcidPFOSTemp_vs_AcidTemp = ConditionAcidPFOSTemp - ConditionAcidTemp, # AcidPFOSTemp vs.Secondary stressor combinaison  
+  AcidPFOSTemp_vs_PFOSTemp = ConditionAcidPFOSTemp - ConditionPFOSTemp,
+  AcidPFOSTemp_vs_AcidPFOS= ConditionAcidPFOSTemp - ConditionAcidPFOS,
+  levels = design)
+
+# contrast matix
+colnames(design)
+
+fit <- lmFit(centred_counts, design)
+fit2 <- contrasts.fit(fit, contr.matrix)
+fit3 <- eBayes(fit2)
+
+summary(decideTests(fit3))
+```
+
+```{r}
+# Get limma result
+results_AcidTemp_vs_Acid <-topTable(fit3, coef="AcidTemp_vs_Acid", sort.by="P", number = Inf)
+results_AcidTemp_vs_Temp <- topTable(fit3, coef="AcidTemp_vs_Temp", sort.by="P", number = Inf)
+results_PFOSTemp_vs_PFOS <- topTable(fit3, coef="PFOSTemp_vs_PFOS", sort.by="P", number = Inf)
+results_PFOSTemp_vs_Temp <- topTable(fit3, coef="PFOSTemp_vs_Temp", sort.by="P", number = Inf)
+results_AcidPFOS_vs_Acid <- topTable(fit3, coef="AcidPFOS_vs_Acid", sort.by="P", number = Inf)
+results_AcidPFOS_vs_PFOS <- topTable(fit3, coef="AcidPFOS_vs_PFOS", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_Acid <- topTable(fit3, coef="AcidPFOSTemp_vs_Acid", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_PFOS <- topTable(fit3, coef="AcidPFOSTemp_vs_PFOS", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_Temp <- topTable(fit3, coef="AcidPFOSTemp_vs_Temp", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_AcidTemp <- topTable(fit3, coef="AcidPFOSTemp_vs_AcidTemp", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_PFOSTemp<- topTable(fit3, coef="AcidPFOSTemp_vs_PFOSTemp", sort.by="P", number = Inf)
+results_AcidPFOSTemp_vs_AcidPFOS <- topTable(fit3, coef="AcidPFOSTemp_vs_AcidPFOS", sort.by="P", number = Inf)
+
+# Annotate result data
+results_AcidTemp_vs_Acid$Treatment <- "AcidTemp_vs_Acid"
+results_AcidTemp_vs_Temp$Treatment <- "AcidTemp_vs_Temp"
+results_PFOSTemp_vs_PFOS$Treatment <- "PFOSTemp_vs_PFOS"
+results_PFOSTemp_vs_Temp$Treatment <- "PFOSTemp_vs_Temp"
+results_AcidPFOS_vs_Acid$Treatment <- "AcidPFOS_vs_Acid"
+results_AcidPFOS_vs_PFOS$Treatment <- "AcidPFOS_vs_PFOS"
+results_AcidPFOSTemp_vs_Acid$Treatment <- "AcidPFOSTemp_vs_Acid"
+results_AcidPFOSTemp_vs_PFOS$Treatment <- "AcidPFOSTemp_vs_PFOS"
+results_AcidPFOSTemp_vs_Temp$Treatment <- "AcidPFOSTemp_vs_Temp"
+results_AcidPFOSTemp_vs_AcidTemp$Treatment <-"AcidPFOSTemp_vs_AcidTemp"
+results_AcidPFOSTemp_vs_PFOSTemp$Treatment<- "AcidPFOSTemp_vs_PFOSTemp"
+results_AcidPFOSTemp_vs_AcidPFOS$Treatment <- "AcidPFOSTemp_vs_AcidPFOS"
+
+# all pairwise combination result 
+results_Pairwise <- rbind(results_AcidTemp_vs_Acid,
+                     results_AcidTemp_vs_Temp,
+                     results_PFOSTemp_vs_PFOS,
+                     results_PFOSTemp_vs_Temp,
+                     results_AcidPFOS_vs_Acid,
+                     results_AcidPFOS_vs_PFOS,
+                     results_AcidPFOSTemp_vs_Acid,
+                     results_AcidPFOSTemp_vs_PFOS,
+                     results_AcidPFOSTemp_vs_Temp,
+                     results_AcidPFOSTemp_vs_AcidTemp,
+                     results_AcidPFOSTemp_vs_PFOSTemp,
+                     results_AcidPFOSTemp_vs_AcidPFOS)
+
+results_Pairwise$Sex <- "Female"
+results_Pairwise$Compound <- rownames(results_Pairwise)
+
+# Subset your group of interest
+results_Pairwise<- results_Pairwise[, c("Compound", "logFC","P.Value", "t", "Treatment", "Sex")]
+
+# rename
+colnames(results_Pairwise)[colnames(results_Pairwise) == "P.Value"] <- "pval"
+colnames(results_Pairwise)[colnames(results_Pairwise) == "logFC"] <- "log2fc"
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)
+results_Pairwise$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+results_Pairwise$diffexpressed[results_Pairwise$log2fc > 0.6 & results_Pairwise$pval < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+results_Pairwise$diffexpressed[results_Pairwise$log2fc < -0.6 & results_Pairwise$pval < 0.05] <- "DOWN"
+
+# Subset differential feature
+DEL_results_Pairwise <- results_Pairwise[results_Pairwise$diffexpressed != "NO", ]
+
+DEL_results_Pairwise %>%
+  group_by(Treatment, diffexpressed) %>%
+  summarise(Count = n(), .groups = "drop")  
+```
+
+# Enrich Pathway
+
+`/!\` The input table provided to Mummichog included the complete feature list, necessary to model the background distribution, with m/z values and retention times to enhance metabolite annotation accuracy ([Mummichog](https://www.metaboanalyst.ca/Secure/mummichog/LibraryView.xhtml)).
+
+[Mummichog](https://www.metaboanalyst.ca/Secure/mummichog/LibraryView.xhtml)
+
+[Mummichog R](https://www.metaboanalyst.ca/resources/vignettes/Functional_Analysis_global_metabolomics.html)
+
+**Useful links:**
+
+-   Comprehensive investigation of pathway enrichment methods for functional interpretation of LC–MS global metabolomics data [(Lu et al, 2022)](https://academic.oup.com/bib/article/24/1/bbac553/6960976).
+
+-   Comparison of popular enrichment methods for untargeted in vitro metabolomics [(Schermer et al, 2025)](https://doi.org/10.1007/s11306-025-02309-0).
+
+-   Environmental chemicals and endogenous metabolites in bile of USA and Norway patients with primary sclerosing cholangitis [(Grant et al 2023)](https://doi.org/10.1093/exposome/osac011).
+
+-   Global metabolomic alterations associated with endocrine-disrupting chemicals among pregnant individuals and newborns [(Puvvula et al, 2025)](https://doi.org/10.1007/s11306-024-02219-7)
+
+```{r}
+Data_Pathway <- read_csv2("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Pathway_lipid_Female.csv")
+Data_Pathway <- Data_Pathway[Data_Pathway$P_Gamma < 0.05 & Data_Pathway$Hits_sig >= 3,]
+head(Data_Pathway)
+```
+
+Pathways not annotated in vertebrates or specific to plant/microbial metabolism were excluded from downstream biological interpretation.
+
+```{r}
+pathway_groups <-list("Glycan biosynthesis and metabolism" = c(
+  "Sialic acid metabolism",
+  "Aminosugars metabolism",
+  "Keratan sulfate biosynthesis",
+  "Glycosphingolipid biosynthesis - globoseries",
+  "Glycosphingolipid biosynthesis - ganglioseries",
+  "Glycosphingolipid biosynthesis - lactoseries",
+  "Glycosphingolipid biosynthesis - neolactoseries",
+  "Blood Group Biosynthesis",
+  "O-Glycan biosynthesis",
+  "Glycosphingolipid metabolism",
+  "N-Glycan biosynthesis",
+  "N-Glycan Degradation",
+  "Keratan sulfate degradation",
+  "Chondroitin sulfate degradation",
+  "Heparan sulfate degradation",
+  "Phosphatidylinositol phosphate metabolism",
+  "Glycosylphosphatidylinositol(GPI)-anchor biosynthesis"), 
+  "Carbohydrate metabolism" = c( "Pyruvate Metabolism",
+    "Glycolysis and Gluconeogenesis",
+    "Pentose phosphate pathway",
+    "Propanoate metabolism",
+    "Glyoxylate and Dicarboxylate Metabolism",
+    "Fructose and mannose metabolism",
+    "Galactose metabolism",
+    "Hexose phosphorylation",
+    "Starch and Sucrose Metabolism",
+    "Pentose and Glucuronate Interconversions", 
+    "Butanoate metabolism"), 
+  "Nucleotide" = c(
+    "Purine metabolism",
+    "Pyrimidine metabolism"),
+  "Amino acid" = c(
+    "Glycine- serine- alanine and threonine metabolism", 
+    "Valine- leucine and isoleucine degradation", 
+    "Tyrosine metabolism", 
+    "Methionine and cysteine metabolism",
+    "Tryptophan metabolism",
+    "Lysine metabolism",
+    "Alanine and Aspartate Metabolism",
+    "Aspartate and asparagine metabolism",
+    "Arginine and Proline Metabolism",
+    "Histidine metabolism",
+    "Selenoamino acid metabolism", 
+    "Beta-Alanine metabolism",
+    "Glutathione Metabolism",
+    "Glutamate metabolism"),
+  "Cofactors and vitamins" = c(
+    "Vitamin A (retinol) metabolism",
+    "Vitamin B1 (thiamin) metabolism",
+    "Vitamin B3 (nicotinate and nicotinamide) metabolism",
+    "Vitamin B6 (pyridoxine) metabolism",
+    "Ascorbate (Vitamin C) and Aldarate Metabolism",
+    "Biopterin metabolism",
+    "Vitamin E metabolism",
+    "Vitamin H (biotin) metabolism",
+    "Ubiquinone Biosynthesis"),
+  "Lipid metabolism" = c(
+    "Mono-unsaturated fatty acid beta-oxidation",
+    "De novo fatty acid biosynthesis",
+    "Fatty Acid Metabolism",
+    "Glycerophospholipid metabolism",
+    "Fatty acid activation",
+    "Arachidonic acid metabolism",
+    "Saturated fatty acids beta-oxidation",
+    "Di-unsaturated fatty acid beta-oxidation",
+    "Squalene and cholesterol biosynthesis",
+    "Omega-3 fatty acid metabolism",
+    "Carnitine shuttle",
+    "Linoleate metabolism", 
+    "Bile acid biosynthesis", 
+    "Putative anti-Inflammatory metabolites formation from EPA", 
+    "C21-steroid hormone biosynthesis and metabolism",
+    "Omega-6 fatty acid metabolism", 
+    "Prostaglandin formation from arachidonate", 
+    "Androgen and estrogen biosynthesis and metabolism"),
+  "Other" = c(
+    "Alkaloid biosynthesis II",
+    "Leukotriene metabolism",
+    "Xenobiotics metabolism", 
+    "Urea cycle/amino group metabolism"))
+
+# Create a named vector for easy lookup
+pathway_to_function <- unlist(lapply(names(pathway_groups), function(name) {
+  setNames(rep(name, length(pathway_groups[[name]])), pathway_groups[[name]])
+}))
+
+# Add BiologicalFunction column to your data frame
+Data_Pathway <- Data_Pathway %>%
+  mutate(BiologicalFunction = pathway_to_function[as.character(Pathway)]) %>%
+  # For pathways not in the list, assign "Unclassified"
+  mutate(BiologicalFunction = ifelse(is.na(BiologicalFunction), "Unclassified", BiologicalFunction))
+```
+
+```{r}
+Data_Pathway$Condition <- factor(Data_Pathway$Condition, levels = c("Acid", "Temp", "PFOS","AcidTemp", "PFOSTemp","AcidPFOS", "AcidPFOSTemp"))
+
+pathway_order <- Data_Pathway %>%
+  distinct(Pathway, BiologicalFunction) %>%
+  arrange(BiologicalFunction, Pathway) %>%
+  pull(Pathway)
+
+Data_Pathway <- Data_Pathway %>%
+  mutate(
+    Pathway = factor(Pathway, levels = pathway_order),
+    Condition = factor(Condition, levels = c("Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp")))
+
+Plot_Pathway_female<-ggplot(Data_Pathway) +
+  aes(x = Condition, 
+    y = Pathway,
+    fill = P_Gamma,           # use fill for the inside color
+    size = EnrichFactor) +
+  facet_grid(BiologicalFunction ~ Sex, scales = "free_y", space = "free_y",
+             labeller = labeller(BiologicalFunction = function(x) {
+               sapply(x, function(y) paste(strwrap(y, width = 10), collapse = "\n"))
+             })) +
+  geom_point(shape = 21, color = "grey10", stroke = 0.3, alpha = 0.8) +  # thin black outline
+  labs(
+    title = "",
+    x = "",
+    y = "",
+    fill = "P-Value", 
+    size = "Enrichment \nfactor"
+  ) +
+  scale_fill_distiller(palette = "Oranges") +
+   theme_bw(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+        axis.text = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        strip.text.y = element_text(size = 10, angle = 0))+ 
+  scale_x_discrete(drop = FALSE) +   # print the condition without affected pathway
+  scale_y_discrete(drop = TRUE) 
+
+
+Plot_Pathway_female
+```
+
+*Fig. 10. Pathway enrichment analysis of liver lipidomic using the Mummichog algorithm.* Significantly enriched pathways (Gamma p-value < 0.05 and Hits sig ≥3) were identified based on the top 10% of lipid features with the lowest raw p-values. The enrichment factor represents the ratio between the observed number of significant hits and the expected number of hits per pathway.
+
+## Upsetplot.
+
+<https://jokergoo.github.io/ComplexHeatmap-reference/book/upset-plot.html> <https://cran.r-project.org/web/packages/UpSetR/vignettes/basic.usage.html>
+
+UpSet plot provides an efficient way to visualize intersections of multiple sets compared to the traditional approaches, i.e. the Venn Diagram. To visualise how many mummichog pathways are shared between conditions and which combinations of conditions share the most pathways, an UpSet plot was generated. Horizontal bars on the left show the total number of significant pathways per condition. Vertical bars show the number of pathways in each intersection. Dots connected by lines below indicate which conditions share those pathways.
+
+```{r}
+library("UpSetR")
+library("grid")
+
+# Metabolite of interest (DEM for each condition)
+lt<- list(
+  "Acid" = Data_Pathway[Data_Pathway$Condition == "Acid",]$Pathway,
+  "Temp" = Data_Pathway[Data_Pathway$Condition == "Temp",]$Pathway,
+  "PFOS" = Data_Pathway[Data_Pathway$Condition == "PFOS",]$Pathway,
+  "AcidTemp" = Data_Pathway[Data_Pathway$Condition == "AcidTemp",]$Pathway,
+  "PFOSTemp" = Data_Pathway[Data_Pathway$Condition == "PFOSTemp",]$Pathway,
+  "AcidPFOS" = Data_Pathway[Data_Pathway$Condition == "AcidPFOS",]$Pathway,
+  "AcidPFOSTemp" = Data_Pathway[Data_Pathway$Condition == "AcidPFOSTemp",]$Pathway)
+
+UpSetR::upset(
+  fromList(lt),
+  order.by = "freq",
+  sets = names(lt),
+  decreasing = TRUE,
+  mb.ratio = c(0.65, 0.35),
+  text.scale = 1.3,
+  point.size = 2,
+  line.size = 1,
+  mainbar.y.label = "Number of shared pathways",
+  sets.x.label = "Pathways per condition",
+  scale.sets = "identity")
+```
+*Fig. 11. UpSet plot showing the intersections of enriched pathways across treatment groups.* Horizontal bars indicate the total number of enriched pathways in each group, whereas vertical bars indicate the number of enriched pathways shared among specific combinations of groups. Single dots represent pathways uniquely enriched in a single group, while connected dots indicate pathways shared among multiple groups.
+
+## Session info
+```{r session_info}
+sessionInfo()
+```
