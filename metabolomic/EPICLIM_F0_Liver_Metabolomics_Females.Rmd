@@ -58,7 +58,7 @@ knitr::opts_chunk$set(
 ```
 
 ```{r Prepare the working environment}
-setwd("/Users/baptisteducarme/Desktop/Epiclim F0 Hepatotoxicity/3. Result/PFASBA")
+#setwd("Path to the folder with the raw files")
 rm(list = ls()) # clean the global environment, good coding practice 
 getwd()
 ```
@@ -66,7 +66,7 @@ getwd()
 # Import dataset
 
 ```{r}
-counts <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Metabolites/EPICLIM_F0_Liver_Metabolite_Females.xlsx",sheet = "NormData")
+counts <- read_excel("data/EPICLIM_F0_Liver_Metabolite_Females.xlsx", sheet = "NormData")
 count<-as.matrix(counts)
 head(counts, 2)
 ```
