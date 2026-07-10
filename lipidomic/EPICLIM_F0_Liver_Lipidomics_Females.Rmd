@@ -55,13 +55,13 @@ R.version
 # Working environment setup
 
 ```{r Prepare the working environment}
-setwd("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids")
+setwd("Path to your folder with the files")
 rm(list = ls()) # clean the global environment, good coding practice 
 ```
 
 # Import dataset
 ```{r}
-counts <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "NormData")
+counts <- read_excel("data/EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "NormData")
 ```
 
 ## Data treatment
