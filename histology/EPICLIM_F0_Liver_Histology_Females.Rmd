@@ -1,0 +1,349 @@
+---
+title: "Epiclim Liver Histology analysis - F0 adult females"
+author: "Baptiste DUcarme"
+date: "2025-12-10"
+output:  
+  html_document:
+    code_folding: show       # Montre le code dans le document
+    number_sections: true    # Ajout table des matières 
+    toc: true                # Table des matiere 
+    toc_float: true          # Table des matières flottante
+editor_options: 
+  chunk_output_type: inline
+---
+This script was used to perform liver histopathology analysis in adult female zebrafish (15.5–16.5 months post-fertilization) following developmental exposure (2 hpf to 28 dpf) to combined climate stressors, including acidification (pH 6.35) and elevated temperature (32°C), as well as PFOS exposure (nominal concentration: 2 µg/L), using a 2 × 2 × 2 factorial design.
+
+For each selected section (n = 3-5 per condition), three 250 × 250 µm quadrats of representative tissue were analyzed. Cell density was evaluated using the cell detection analysis tool (QuPath v0.5.1, x64) with detection image set to Hematoxylin OD, background radius of 5µm, and cell expansion of 1µm. The percentage of area occupied by vesicles was then estimated using the pixel threshold tool (threshold = 0.05; resolution = 0.39µm/px). Each section was manually reviewed to exclude veins, bile ducts, and ductules.
+
+To avoid pseudo-replication, statistical analyses were conducted on section-level means of cell density and vesicle area, using a robust linear model following evaluation of residual diagnostic plots. Models included condition and exposure batch as fixed factors (design: ~ condition + exposure). For each outcome, the overall contribution of condition and of exposure was first assessed using robust omnibus F-tests. Pairwise comparisons among conditions were then performed using estimated marginal means (emmeans package). Comparisons against Control were adjusted using Dunnett's method, and all pairwise comparisons among conditions were adjusted using the BH method. Statistical significance was set at α = 0.05.
+
+To be consistent with other analyses performed during this experiment, histology analysis was restricted to the two exposure common to all conditions (Expo2, Expo3). One individual (PFOSTemp_Expo1), sampled from a previous batch (Expo1), was excluded from downstream analysis, as this exposure contained only this single data point and could not be meaningfully compared across conditions. 
+
+A sensitivity analysis confirmed this exclusion did not affect the condition results for either outcome (cell density or vacuole area), and for the Exposure result for cell density. However, for vacuole area, the Exposure effect became statistically significant after excluding Expo1 (from p = 0.056 to p = 0.020) and Exposure batch was therefore retained as a fixed factor.
+
+## Working environment setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+```{r Prepare the working environment}
+setwd("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology")
+rm(list = ls()) # clean the global environment, good coding practice 
+
+getwd()
+list.files()
+
+myColors <- c("Control" = "#4C78A8", "Acid" = "#59A14F", "Temp" = "#E45756","PFOS" = "#B279A2", "AcidTemp" = "#8C6D1F", "PFOSTemp" = "#AD1457", "AcidPFOS" = "#5B6D5B", "AcidPFOSTemp" = "#7B3F5A")
+```
+
+# Package
+
+```{r package}
+library("readxl") # open data
+library("dplyr") # code in pipe
+library("ggplot2") # for graph
+library("rstatix") # Analyse stat
+library("gridExtra") # For graph alignment
+library("ggpubr")# for stat link with ggplot
+library("lubridate") #for timpoint analysis
+library("multcomp")# stat and letter
+library('AER')# stat and letter
+library("stringr")
+
+library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
+library(RColorBrewer) # for a colourful plot
+library(ggrepel) # for nice annotations
+
+R.version
+```
+
+# Cells density
+```{r}
+Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
+
+# Gather cell count by individual to avoid pseudo replication
+Data_mean <- aggregate(Num_detection ~ ID + Condition + Expo,data = Data, FUN = mean)
+
+# Sort the data
+Data_mean$Condition <- factor(Data_mean$Condition , levels = c("Control","Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+
+Data_mean$ID<-as.factor(Data_mean$ID)
+Data_mean$Condition<-as.factor(Data_mean$Condition)
+Data_mean$Expo<-as.factor(Data_mean$Expo)
+
+# Warning, unballenced design
+Data_mean<-Data_mean[Data_mean$Expo != "Expo1",]
+Data_mean$Expo <- droplevels(Data_mean$Expo)
+Data_mean$Condition <- droplevels(Data_mean$Condition)
+
+table(Data_mean$Condition, Data_mean$Expo)
+```
+
+```{r}
+Data_mean %>% 
+  group_by(Condition) %>%
+  get_summary_stats(Num_detection, type = "mean_sd")
+```
+
+
+```{r}
+model_1 <- lm(Num_detection ~ Condition + Expo, data = Data_mean)
+
+par(mfrow = c(2, 2)) 
+plot(model_1)
+par(mfrow = c(1, 1))
+```
+
+Switch to rlm.
+
+```{r}
+# robust model
+model_2 <- rlm(Num_detection ~ Condition + Expo, data = Data_mean)
+names(coef(model_2))
+
+library("sfsmisc")
+# Look at the variable contribution to the model
+#Omnibus F-test
+f.robftest(model_2, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_2, var = c("ExpoExpo3"))
+```
+
+The condition significantly contributed to the model (p-value = 0.000754 < 0.05), whereas no evidence Exposure explains additional variation once Condition is in the model (p-value = 0.9442).
+
+```{r}
+library("emmeans")
+emm_pooled <- emmeans(model_2, ~ Condition)
+contrast(emm_pooled, method = "trt.vs.ctrl", ref = "Control", adjust = "dunnett")
+#All pairwise comparison 
+pairs(emm_pooled, adjust = "BH")
+```
+
+```{r}
+# BH compact letters 
+cld_df <- as.data.frame(cld(emm_pooled, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+# Sample sizes
+n_df <- Data_mean %>%
+  filter(!is.na(Num_detection)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop")
+n_df$label <- paste0("n=", n_df$n)
+
+# Plot
+plot1<-ggplot(Data_mean, aes(x = Condition, y = Num_detection, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 900, label = .group), 
+            size = 5, inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = 650, label = label), 
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  labs(y = "Number of hepatocytes per 250x250µm
+       quadrat of female liver tissue", x = "") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+
+plot1
+```
+
+*Figure 1. Female liver histopathology:* Mean hepatocyte density per 250 × 250 µm quadrat.
+
+# Lipid %
+```{r}
+Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
+head(Data) 
+
+# Gather the semi-quantitative lipid content by individual to avoid pseudo replication
+Data_mean <- aggregate(Pourcentage ~ ID + Condition + Expo,data = Data, FUN = mean)
+
+# Sort the data
+Data_mean$Condition <- factor(Data_mean$Condition , levels = c("Control","Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+
+Data_mean$ID<-as.factor(Data_mean$ID)
+Data_mean$Condition<-as.factor(Data_mean$Condition)
+Data_mean$Expo<-as.factor(Data_mean$Expo)
+
+# Warning, unballenced design
+Data_mean<-Data_mean[Data_mean$Expo != "Expo1",]
+Data_mean$Expo <- droplevels(Data_mean$Expo)
+Data_mean$Condition <- droplevels(Data_mean$Condition)
+
+table(Data_mean$Condition, Data_mean$Expo)
+```
+
+```{r}
+model_1 <- lm(Pourcentage ~ Condition + Expo, data = Data_mean)
+
+par(mfrow = c(2, 2)) 
+plot(model_1)
+par(mfrow = c(1, 1))
+```
+
+Idem, switch to rlm
+
+```{r}
+# robust model
+model_2 <- rlm(Pourcentage ~ Condition + Expo, data = Data_mean)
+names(coef(model_2))
+
+library("sfsmisc")
+# Look at the variable contribution to the model
+#Omnibus F-test
+f.robftest(model_2, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_2, var = c("ExpoExpo3"))
+```
+
+Condition did not significantly explain variation in vacuole area % once Expo was accounted for (F = 0.74373, p-value = 0.6376). Expo showed a significant effect (F = 6.1203, p-value = 0.01994). The two exposure batches were therefore retained as fixed factor.
+
+```{r}
+#All pairwise comparison 
+emm_pooled <- emmeans(model_2, ~ Condition)
+contrast(emm_pooled, method = "trt.vs.ctrl", ref = "Control", adjust = "dunnett")
+
+#All pairwise comparison 
+pairs(emm_pooled, adjust = "BH")
+```
+
+```{r}
+# BH compact letters 
+cld_df <- as.data.frame(cld(emm_pooled, Letters = letters, adjust = "BH"))
+cld_df$.group <- trimws(cld_df$.group)
+
+# Sample sizes
+n_df <- Data_mean %>%
+  filter(!is.na(Pourcentage)) %>%
+  group_by(Condition) %>%
+  summarise(n = n(), .groups = "drop")
+n_df$label <- paste0("n=", n_df$n)
+
+# Plot
+plot2<-ggplot(Data_mean, aes(x = Condition, y = Pourcentage, fill = Condition)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2, fill = "white") +
+  scale_fill_manual(values = myColors) +
+  geom_text(data = cld_df, aes(x = Condition, y = 25, label = .group), 
+            size = 5, inherit.aes = FALSE) +
+  geom_text(data = n_df, aes(x = Condition, y = 0, label = label), 
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+ labs(y = "\nProportion of area (%) occupied by vacuoles", x = "")+
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 13),
+        plot.title = element_text(size = 14, face = "bold"))
+
+plot2
+```
+
+*Figure 2. Female liver histopathology:* Mean proportion of area (%) occupied by vacuoles per 250 × 250 µm quadrat. 
+
+# Sensitivity check
+## Cell density
+```{r}
+Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Count_cell")
+# Gather cell count by individual to avoid pseudo replication
+Data_mean <- aggregate(Num_detection ~ ID + Condition + Expo,data = Data, FUN = mean)
+
+# Sort the data
+Data_mean$Condition <- factor(Data_mean$Condition , levels = c("Control","Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+
+Data_mean$ID<-as.factor(Data_mean$ID)
+Data_mean$Condition<-as.factor(Data_mean$Condition)
+Data_mean$Expo<-as.factor(Data_mean$Expo)
+
+# Model full
+Data_Expo123<-Data_mean
+
+# Restricted model
+Data_Expo23<-Data_Expo123[Data_Expo123$Expo != "Expo1",]
+Data_Expo23$Expo <- droplevels(Data_Expo23$Expo)
+Data_Expo23$Condition <- droplevels(Data_Expo23$Condition)
+```
+
+```{r}
+model_Full <- rlm(Num_detection ~ Condition + Expo, data = Data_Expo123) # with expo1
+model_Restricted <- rlm(Num_detection ~ Condition + Expo, data = Data_Expo23) # without expo1
+```
+
+
+```{r}
+library("sfsmisc")
+
+### Condition
+f.robftest(model_Full, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+
+f.robftest(model_Restricted, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+```
+
+```{r}
+### Exposure
+f.robftest(model_Full, var = c("ExpoExpo2","ExpoExpo3"))
+f.robftest(model_Restricted, var = c("ExpoExpo3"))
+```
+Sensitivity analysis show that excluding the single Expo1 individual did not qualitatively change the results. The Condition effect remained highly significant in both the full (F = 5.83, p < 0.001) and restricted (F = 5.21, p < 0.001) datasets, while Exposure batch remained non-significant in both (full: p = 0.776; restricted: p = 0.944).
+
+## Lipid %
+```{r}
+Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
+
+# Gather cell count by individual to avoid pseudo replication
+Data_mean <- aggregate(Pourcentage ~ ID + Condition + Expo,data = Data, FUN = mean)
+
+# Sort the data
+Data_mean$Condition <- factor(Data_mean$Condition , levels = c("Control","Acid", "Temp", "PFOS", "AcidTemp", "PFOSTemp", "AcidPFOS", "AcidPFOSTemp"))
+
+Data_mean$ID<-as.factor(Data_mean$ID)
+Data_mean$Condition<-as.factor(Data_mean$Condition)
+Data_mean$Expo<-as.factor(Data_mean$Expo)
+
+# Model full
+Data_Expo123<-Data_mean
+
+# Restricted model
+Data_Expo23<-Data_Expo123[Data_Expo123$Expo != "Expo1",]
+Data_Expo23$Expo <- droplevels(Data_Expo23$Expo)
+Data_Expo23$Condition <- droplevels(Data_Expo23$Condition)
+```
+
+```{r}
+model_Full <- rlm(Pourcentage ~ Condition + Expo, data = Data_Expo123) # with expo1
+model_Restricted <- rlm(Pourcentage ~ Condition + Expo, data = Data_Expo23) # without expo1
+```
+
+```{r}
+### Condition
+library("sfsmisc")
+f.robftest(model_Full, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+f.robftest(model_Restricted, var = c("ConditionAcid", "ConditionTemp", "ConditionPFOS","ConditionAcidTemp", "ConditionAcidPFOS", "ConditionPFOSTemp", "ConditionAcidPFOSTemp"))
+```
+
+```{r}
+### Exposure
+library("sfsmisc")
+f.robftest(model_Full, var = c("ExpoExpo2","ExpoExpo3"))
+f.robftest(model_Restricted, var = c("ExpoExpo3"))
+```
+
+Condition does not significantly explain variation in vacuole area %, with or without the Expo1 individual.
+
+## Session info
+```{r session_info}
+sessionInfo()
+```
+
+
+
+
+
