@@ -1,12 +1,15 @@
 # Histology analysis - EpiClim F0 Liver
+
 Histopathological analysis of adult female zebrafish liver following developmental exposure to combined climate stressors and PFOS.
 
 ## Files
+
 - `.Rmd` — Analysis source code
 - `.html` — Rendered analysis
 - `.xlsx` file — Input data (cell density and vacuole area measurements + metadata)
 
 ## Analysis pipeline
+
 - Image analysis: QuPath v0.5.1 (x64)
 - Endpoints: cell density (cell detection tool) and vacuole area (pixel threshold tool)
 - Quantification: 3 quadrats (250 × 250 µm) per section
@@ -16,9 +19,11 @@ Histopathological analysis of adult female zebrafish liver following development
 - Sensitivity analysis: confirmed robustness of results after excluding preliminary exposure batch
 
 ## Data
+
 - **Samples**: 37 adult females (n = 3-5 per condition)
 
 ## Reproducibility
+
 To reproduce the analyses:
 1. Clone this repository
 2. Open the .Rmd file in RStudio
