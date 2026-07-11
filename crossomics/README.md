@@ -22,3 +22,4 @@ To reproduce the analyses:
 2. Save the resulting objects with `save.image("epiclim_analysis.RData")`
 3. Run this cross-omics script
 
+Package versions used in this analysis are documented in the sessionInfo output at the end of the rendered HTML.
