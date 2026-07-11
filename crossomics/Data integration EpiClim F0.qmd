@@ -22,7 +22,7 @@ setwd("~/Research projects ongoing/1. EPICLIM/Omics_integration")
 # Upload CSV with enriched pathways (from working directory)
 metabo <- read.csv2("EPICLIM_F0_Liver_PFASBA_EnrichPathway_V4.csv")
 
-lipido <- read.csv2("EPICLIM_F0_Liver_Lipidomics_EnrichPathway_V4_FemaleOnly.csv")
+lipido <- read.csv2("EPICLIM_F0_Liver_Lipidomics_EnrichPathway_V4.csv")
 
 # Check data
 cat("Métabolomique:", nrow(metabo), "lignes,", ncol(metabo), "colonnes\n")
