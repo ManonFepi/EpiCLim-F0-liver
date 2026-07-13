@@ -20,7 +20,7 @@ Histopathological analysis of adult female zebrafish liver following development
 
 ## Data
 
-- **Samples**: 37 adult females (n = 3-5 per condition)
+- **Samples**: 36 adult females (n = 3-5 per condition)
 
 ## Reproducibility
 
