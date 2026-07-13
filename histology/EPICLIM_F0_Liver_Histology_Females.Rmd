@@ -155,7 +155,7 @@ plot1
 
 # Lipid %
 ```{r}
-Data <- read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Histology/EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
+Data <- read_excel("EPICLIM_F0_Liver_Histology_Females.xlsx",sheet = "Vacuolization")
 head(Data) 
 
 # Gather the semi-quantitative lipid content by individual to avoid pseudo replication
