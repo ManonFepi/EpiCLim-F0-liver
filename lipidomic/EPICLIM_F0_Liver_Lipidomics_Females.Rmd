@@ -86,7 +86,7 @@ str(counts_matrix)
 # Import MetaData
 
 ```{r}
-metadata<-read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "Metadata")
+metadata<-read_excel("EPICLIM_F0_Liver_Lipid_Females.xlsx",sheet = "Metadata")
 ```
 
 ## MetaData treatment
@@ -1390,7 +1390,7 @@ DEL_results_Pairwise %>%
 -   Global metabolomic alterations associated with endocrine-disrupting chemicals among pregnant individuals and newborns [(Puvvula et al, 2025)](https://doi.org/10.1007/s11306-024-02219-7)
 
 ```{r}
-Data_Pathway <- read_csv2("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Lipids/EPICLIM_F0_Liver_Pathway_lipid_Female.csv")
+Data_Pathway <- read_csv2("EPICLIM_F0_Liver_Pathway_lipid_Female.csv")
 Data_Pathway <- Data_Pathway[Data_Pathway$P_Gamma < 0.05 & Data_Pathway$Hits_sig >= 3,]
 head(Data_Pathway)
 ```
