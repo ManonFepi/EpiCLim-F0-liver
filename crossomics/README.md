@@ -4,7 +4,7 @@ Pathway-level integration of transcriptomic, metabolomic, and lipidomic analyses
 ## Files
 - `.Qmd` — Analysis source code
 - `.html` — Rendered analysis with all results
-- `.csv`files — Inpit files for metabolomic and lipidomic pathways.
+- `.csv`files — Input files for metabolomic and lipidomic pathways.
 
 ## Analysis pipeline
 - Pathway-level integration using shared KEGG BRITE functional categories
