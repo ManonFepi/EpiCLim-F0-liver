@@ -17,9 +17,9 @@ library(stringr)
 library(ggplot2)
 
 # Upload CSV with enriched pathways (from working directory)
-metabo <- read.csv2("EPICLIM_F0_Liver_PFASBA_EnrichPathway_V4.csv")
+metabo <- read.csv2("EPICLIM_F0_Liver_Pathway_Metabolite_Female.csv")
 
-lipido <- read.csv2("EPICLIM_F0_Liver_Lipidomics_EnrichPathway_V4.csv")
+lipido <- read.csv2("EPICLIM_F0_Liver_Pathway_lipid_Female.csv")
 
 # Check data
 cat("Métabolomique:", nrow(metabo), "lignes,", ncol(metabo), "colonnes\n")
