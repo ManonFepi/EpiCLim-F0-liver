@@ -82,7 +82,7 @@ colnames(counts_matrix) <- colnames(counts)[-1]
 # Import MetaData
 
 ```{r}
-metadata<-read_excel("/Users/baptisteducarme/Desktop/EpiCLim-F0-liver-female/Metabolites/EPICLIM_F0_Liver_Metabolite_Females.xlsx",sheet = "MetaData")
+metadata<-read_excel("EPICLIM_F0_Liver_Metabolite_Females.xlsx",sheet = "MetaData")
 
 head(metadata)
 metadata <- metadata %>%rename("Sample"= "name")
