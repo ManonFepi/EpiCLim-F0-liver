@@ -12,11 +12,11 @@ combined climate stressors (acidification at pH 6.35, elevated temperature
 at 32°C) and PFOS (nominal 2 µg/L) in a 2×2×2 factorial design.
 
 Analyses are performed on female liver samples (n=27, main analysis; n=25, 
-sensitivity analysis). Male samples are excluded due to strong sexual 
+sensitivity analysis). Male samples are excluded due to the strong sexual 
 dimorphism of the zebrafish liver transcriptome, in accordance with the 
 overall study design.
 
-Raw sequencing data are available on GEO (accession GSE######).
+Raw sequencing data are available on GEO (accession GSE338738).
 
 ## Setup
 
